@@ -28,6 +28,11 @@ interface SavedGoogleAccount {
 }
 
 const SAVED_GOOGLE_KEY = 'misha_saved_google_ids';
+const GOOGLE_CLIENT_ID =
+  (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID ||
+  (window as any).__GOOGLE_CLIENT_ID__ ||
+  '1046187762691-misha-greetings.apps.googleusercontent.com';
+const NETLIFY_PROD_URL = 'https://transcendent-scone-65721a.netlify.app/';
 
 export const AuthModal: React.FC = () => {
   const {
@@ -60,7 +65,7 @@ export const AuthModal: React.FC = () => {
         const google = (window as any).google;
         if (google?.accounts?.id) {
           google.accounts.id.initialize({
-            client_id: '1046187762691-misha-greetings.apps.googleusercontent.com',
+            client_id: GOOGLE_CLIENT_ID,
             callback: async (response: any) => {
               if (response && response.credential) {
                 try {
@@ -145,7 +150,7 @@ export const AuthModal: React.FC = () => {
       // 1. Try Google Identity Services OAuth 2.0 popup token client
       if (google?.accounts?.oauth2) {
         const client = google.accounts.oauth2.initTokenClient({
-          client_id: '1046187762691-misha-greetings.apps.googleusercontent.com',
+          client_id: GOOGLE_CLIENT_ID,
           scope: 'openid email profile',
           callback: async (tokenResponse: any) => {
             if (tokenResponse && tokenResponse.access_token) {
@@ -160,9 +165,12 @@ export const AuthModal: React.FC = () => {
                     setSuccessMsg(`Signed in with Google as ${loggedUser.name}!`);
                     return;
                   }
+                } else {
+                  // If 401 or unauthorized from Google API, fallback to picker
+                  setMode('google-picker');
                 }
               } catch (err: any) {
-                setError('Failed to fetch Google profile: ' + (err.message || ''));
+                setMode('google-picker');
               }
             }
           },
@@ -338,12 +346,16 @@ export const AuthModal: React.FC = () => {
                 type="button"
                 onClick={() => {
                   try {
-                    const redirectUrl = window.location.origin.includes('vercel.app')
-                      ? window.location.origin
-                      : 'https://misha-greetings-card-25gnx8zbg-sentinelai-xdr.vercel.app/';
-                    const clientId = '1046187762691-misha-greetings.apps.googleusercontent.com';
+                    const currentOrigin = window.location.origin;
+                    const redirectUrl =
+                      currentOrigin && (currentOrigin.includes('netlify.app') || currentOrigin.includes('vercel.app'))
+                        ? `${currentOrigin.replace(/\/+$/, '')}/`
+                        : NETLIFY_PROD_URL;
+                    const clientId = GOOGLE_CLIENT_ID;
                     const scope = encodeURIComponent('openid email profile');
-                    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${clientId}&redirect_uri=${encodeURIComponent(
+                    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(
+                      clientId
+                    )}&redirect_uri=${encodeURIComponent(
                       redirectUrl
                     )}&response_type=token%20id_token&scope=${scope}&nonce=${Date.now()}&prompt=select_account`;
                     

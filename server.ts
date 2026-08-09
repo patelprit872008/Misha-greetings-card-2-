@@ -689,10 +689,11 @@ async function startServer() {
     const redirectUri =
       (req.query.redirect_uri as string) ||
       process.env.GOOGLE_REDIRECT_URI ||
-      'https://misha-greetings-card-25gnx8zbg-sentinelai-xdr.vercel.app/';
+      'https://transcendent-scone-65721a.netlify.app/';
     const clientId =
       process.env.GOOGLE_CLIENT_ID ||
       process.env.CLIENT_ID ||
+      process.env.VITE_GOOGLE_CLIENT_ID ||
       '1046187762691-misha-greetings.apps.googleusercontent.com';
     const scope = encodeURIComponent('openid email profile');
     const state = Buffer.from(JSON.stringify({ redirectUri })).toString('base64');
