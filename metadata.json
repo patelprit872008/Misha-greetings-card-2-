@@ -1,0 +1,7 @@
+{
+  "name": "Misha Greetings Card - Interactive Romantic & Celebration Cards Studio",
+  "description": "Create and share interactive 1-page personalized greeting websites with custom romantic themes, love questions, photo memories, secret passkey chat, and AI letter generation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
