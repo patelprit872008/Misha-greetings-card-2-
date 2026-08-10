@@ -18,26 +18,31 @@ declare global {
   }
 }
 
+export const DEFAULT_GOOGLE_CLIENT_ID =
+  '519158285260-47pnfivd7bldlrkk00bglptgiiivbr8d.apps.googleusercontent.com';
+
 /**
- * Retrieves and cleans the Google Client ID from environment variables.
+ * Retrieves and cleans the Google Client ID from environment variables,
+ * falling back to the configured production client ID.
  * Strips leading protocols, trailing slashes, and surrounding whitespace.
- * Never hardcodes fallback client IDs or allows localStorage overrides.
  */
 export const getGoogleClientId = (): string => {
   const rawId =
     (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID ||
     (window as any).__GOOGLE_CLIENT_ID__ ||
-    '';
+    DEFAULT_GOOGLE_CLIENT_ID;
 
   if (!rawId || typeof rawId !== 'string') {
-    return '';
+    return DEFAULT_GOOGLE_CLIENT_ID;
   }
 
-  return rawId
+  const cleaned = rawId
     .trim()
     .replace(/^https?:\/\//i, '')
     .replace(/\/+$/, '')
     .trim();
+
+  return cleaned || DEFAULT_GOOGLE_CLIENT_ID;
 };
 
 /**

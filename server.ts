@@ -694,7 +694,7 @@ async function startServer() {
       process.env.GOOGLE_CLIENT_ID ||
       process.env.CLIENT_ID ||
       process.env.VITE_GOOGLE_CLIENT_ID ||
-      '';
+      '519158285260-47pnfivd7bldlrkk00bglptgiiivbr8d.apps.googleusercontent.com';
     const clientId = rawClientId.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '').trim();
     return res.json({ clientId });
   });
@@ -877,15 +877,14 @@ async function startServer() {
     return res.json({ success: true });
   });
 
-  // Auth 6: Master Admin Stats & Management (Returns both Cards and All Logged-in Users)
+  // Auth 6: Master Admin Stats & Management (Strictly restricted to verified Admin account)
   app.get('/api/admin/stats', (req, res) => {
     const authHeader = req.headers.authorization || '';
     const token = authHeader.replace('Bearer ', '').trim() || (req.query.token as string);
     const user = token ? tokensStore.get(token) : null;
-    const reqEmail = ((req.query.email as string) || user?.email || '').toLowerCase();
 
-    if (reqEmail !== ADMIN_EMAIL.toLowerCase() && user?.role !== 'admin') {
-      return res.status(403).json({ error: 'Admin VIP access required' });
+    if (!user || (user.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase() && user.role !== 'admin')) {
+      return res.status(403).json({ error: 'Access denied. Master Admin credentials required.' });
     }
 
     cleanupExpiredData();
@@ -946,10 +945,9 @@ async function startServer() {
     const authHeader = req.headers.authorization || '';
     const token = authHeader.replace('Bearer ', '').trim();
     const user = token ? tokensStore.get(token) : null;
-    const reqEmail = ((req.query.email as string) || user?.email || '').toLowerCase();
 
-    if (reqEmail !== ADMIN_EMAIL.toLowerCase() && user?.role !== 'admin') {
-      return res.status(403).json({ error: 'Admin VIP access required' });
+    if (!user || (user.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase() && user.role !== 'admin')) {
+      return res.status(403).json({ error: 'Access denied. Master Admin credentials required.' });
     }
 
     pagesStore.delete(id);

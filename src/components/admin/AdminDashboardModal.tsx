@@ -64,7 +64,7 @@ interface ServerStats {
 }
 
 export const AdminDashboardModal: React.FC = () => {
-  const { isAdminDashboardOpen, closeAdminDashboard, token, user } = useAuth();
+  const { isAdminDashboardOpen, closeAdminDashboard, token, user, isAdmin } = useAuth();
   const [activeTab, setActiveTab] = useState<'users' | 'cards'>('users');
   const [stats, setStats] = useState<ServerStats | null>(null);
   const [cards, setCards] = useState<CardItem[]>([]);
@@ -74,6 +74,7 @@ export const AdminDashboardModal: React.FC = () => {
   const [actionFeedback, setActionFeedback] = useState<string | null>(null);
 
   const fetchAdminData = async () => {
+    if (!isAdmin) return;
     setIsLoading(true);
     setActionFeedback(null);
     let serverLoaded = false;
@@ -152,7 +153,7 @@ export const AdminDashboardModal: React.FC = () => {
     }
   }, [isAdminDashboardOpen]);
 
-  if (!isAdminDashboardOpen) return null;
+  if (!isAdminDashboardOpen || !isAdmin) return null;
 
   const handleDeleteCard = async (cardId: string) => {
     if (!window.confirm(`Are you sure you want to permanently delete card ID: ${cardId}?`)) {

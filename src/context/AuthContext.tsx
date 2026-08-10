@@ -624,7 +624,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const openAdminDashboard = () => {
-    setIsAdminDashboardOpen(true);
+    if (user && (user.email.toLowerCase() === ADMIN_MASTER_EMAIL.toLowerCase() || user.role === 'admin')) {
+      setIsAdminDashboardOpen(true);
+    }
   };
 
   const closeAdminDashboard = () => {
