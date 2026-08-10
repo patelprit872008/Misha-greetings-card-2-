@@ -134,6 +134,8 @@ export const PhotoGalleryModal: React.FC<PhotoGalleryModalProps> = ({
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [customUrl, setCustomUrl] = useState('');
   const [customCaption, setCustomCaption] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const categories = ['All', 'Romantic', 'Aesthetic', 'Celebration'];
 
@@ -141,6 +143,62 @@ export const PhotoGalleryModal: React.FC<PhotoGalleryModalProps> = ({
     selectedCategory === 'All'
       ? CURATED_PRESETS
       : CURATED_PRESETS.filter((p) => p.category === selectedCategory);
+
+  const handleDeviceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 20 * 1024 * 1024) {
+      setUploadError('Image must be under 20MB');
+      return;
+    }
+
+    setIsUploading(true);
+    setUploadError(null);
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const dataUrl = event.target?.result as string;
+        const res = await fetch('/api/upload', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataUrl, filename: file.name }),
+        });
+
+        if (res.ok) {
+          const json = await res.json();
+          const savedUrl = json.url || dataUrl;
+          onSelectPhoto({
+            id: 'photo-' + Date.now(),
+            url: savedUrl,
+            caption: customCaption.trim() || file.name.replace(/\.[^/.]+$/, '') || 'Our Memory ❤️',
+            rotation: Math.floor(Math.random() * 6) - 3,
+          });
+          onClose();
+        } else {
+          // Fallback to dataUrl
+          onSelectPhoto({
+            id: 'photo-' + Date.now(),
+            url: dataUrl,
+            caption: customCaption.trim() || 'Our Memory ❤️',
+            rotation: Math.floor(Math.random() * 6) - 3,
+          });
+          onClose();
+        }
+      } catch (err) {
+        console.error('Photo upload error:', err);
+        setUploadError('Failed to upload image. Please try again.');
+      } finally {
+        setIsUploading(false);
+      }
+    };
+    reader.onerror = () => {
+      setUploadError('Failed to read file');
+      setIsUploading(false);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleAddCustom = (e: React.FormEvent) => {
     e.preventDefault();
@@ -191,39 +249,70 @@ export const PhotoGalleryModal: React.FC<PhotoGalleryModalProps> = ({
 
         {/* Body */}
         <div className="p-6 max-h-[75vh] overflow-y-auto space-y-6">
-          {/* Custom URL input */}
-          <form
-            onSubmit={handleAddCustom}
-            className="p-4 rounded-2xl bg-stone-800/60 border border-stone-700 space-y-3"
-          >
-            <div className="text-xs font-bold uppercase tracking-wider text-stone-300 flex items-center gap-1.5">
-              <Plus className="w-4 h-4 text-rose-400" />
-              Add Any Image via Direct URL
+          {uploadError && (
+            <div className="p-3 rounded-xl bg-rose-950/80 border border-rose-500/50 text-rose-300 text-xs">
+              {uploadError}
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+          )}
+
+          {/* Upload from Device + Custom URL */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* Direct Device Upload */}
+            <label className="flex flex-col items-center justify-center p-4 rounded-2xl bg-stone-800/80 border border-dashed border-stone-600 hover:border-rose-500 hover:bg-stone-800 cursor-pointer transition-all group">
               <input
-                type="url"
-                value={customUrl}
-                onChange={(e) => setCustomUrl(e.target.value)}
-                placeholder="https://images.unsplash.com/... or any image link"
-                className="sm:col-span-7 px-3.5 py-2 rounded-xl bg-stone-900 border border-stone-700 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-rose-500"
+                type="file"
+                accept="image/*"
+                onChange={handleDeviceUpload}
+                disabled={isUploading}
+                className="hidden"
               />
-              <input
-                type="text"
-                value={customCaption}
-                onChange={(e) => setCustomCaption(e.target.value)}
-                placeholder="Photo caption (optional)"
-                className="sm:col-span-3 px-3.5 py-2 rounded-xl bg-stone-900 border border-stone-700 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-rose-500"
-              />
-              <button
-                type="submit"
-                disabled={!customUrl.trim()}
-                className="sm:col-span-2 py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold disabled:opacity-50 transition-colors"
-              >
-                Add Photo
-              </button>
-            </div>
-          </form>
+              <div className="w-10 h-10 rounded-xl bg-rose-500/10 text-rose-400 group-hover:scale-110 flex items-center justify-center mb-2 transition-transform">
+                <Upload className="w-5 h-5" />
+              </div>
+              <span className="text-xs font-bold text-white">
+                {isUploading ? 'Uploading to Cloud...' : 'Upload from Phone / PC'}
+              </span>
+              <span className="text-[10px] text-stone-400 mt-0.5">
+                PNG, JPG, WebP, GIF (up to 20MB)
+              </span>
+            </label>
+
+            {/* Custom URL input */}
+            <form
+              onSubmit={handleAddCustom}
+              className="p-4 rounded-2xl bg-stone-800/60 border border-stone-700 space-y-2 flex flex-col justify-between"
+            >
+              <div className="text-xs font-bold uppercase tracking-wider text-stone-300 flex items-center gap-1.5">
+                <Plus className="w-4 h-4 text-rose-400" />
+                Add via Image Link
+              </div>
+              <div className="space-y-2">
+                <input
+                  type="url"
+                  value={customUrl}
+                  onChange={(e) => setCustomUrl(e.target.value)}
+                  placeholder="https://... image link"
+                  className="w-full px-3.5 py-2 rounded-xl bg-stone-900 border border-stone-700 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-rose-500"
+                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={customCaption}
+                    onChange={(e) => setCustomCaption(e.target.value)}
+                    placeholder="Caption (optional)"
+                    className="flex-1 px-3.5 py-2 rounded-xl bg-stone-900 border border-stone-700 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-rose-500"
+                  />
+                  <button
+                    type="submit"
+                    disabled={!customUrl.trim()}
+                    className="py-2 px-4 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold disabled:opacity-50 transition-colors"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
 
           {/* Category Tabs */}
           <div className="flex gap-2 border-b border-stone-800 pb-3">

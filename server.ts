@@ -1,7 +1,18 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
+ * 
+ * Misha Greetings Card - Production Full-Stack Server
+ * Powered by Neon PostgreSQL Database & Cloud Media Storage
  */
+
+// Clean invalid or empty CLOUDINARY_URL from process.env BEFORE any SDK evaluation
+if (process.env.CLOUDINARY_URL !== undefined) {
+  const rawUrl = (process.env.CLOUDINARY_URL || '').trim();
+  if (!rawUrl || !rawUrl.startsWith('cloudinary://')) {
+    delete process.env.CLOUDINARY_URL;
+  }
+}
 
 import express from 'express';
 import path from 'path';
@@ -9,286 +20,82 @@ import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 
-// Persistent storage file path & media upload directory
-const DATA_BACKUP_FILE = path.join(process.cwd(), '.misha_data_store.json');
+import {
+  initDatabase,
+  saveGreeting,
+  getGreetingByShortId,
+  getGreetingById,
+  incrementGreetingViewCount,
+  listAllGreetings,
+  deleteGreeting,
+  saveUser,
+  getUserByEmail,
+  getUserById,
+  saveUserToken,
+  getUserByToken,
+  deleteUserToken,
+  listAllUsers,
+  saveReaction,
+  getReactions,
+  saveChatMessage,
+  getChatMessages,
+  clearChatMessages,
+  recordChatJoin,
+  recordChatExit,
+  isChatRoomExpired,
+  cleanupExpiredChats,
+  runRetentionPolicyWorker,
+  isDatabaseConnected,
+  GreetingRecord,
+  ServerUser,
+  CARD_RETENTION_DAYS,
+  CARD_RETENTION_MS,
+  CHAT_RETENTION_HOURS,
+  CHAT_RETENTION_MS,
+  isGreetingExpired,
+  cleanupExpiredGreetings,
+} from './server/db';
+
+import {
+  uploadBufferToCloud,
+  uploadBase64ToCloud,
+  deepSanitizeAndUploadMedia,
+  deleteCloudMedia,
+  isCloudinaryActive,
+} from './server/storage';
+
+export const ADMIN_EMAIL = 'patelprit872008@gmail.com';
+
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
-// Published Greeting Database Schema
-export interface GreetingRecord {
-  id: string;
-  short_id: string;
-  owner_id: string;
-  title: string;
-  project_json: any;
-  status: 'published' | 'draft' | 'archived';
-  visibility: 'public' | 'unlisted' | 'private';
-  created_at: string;
-  updated_at: string;
-  expires_at?: string;
-  view_count: number;
-  chatKey?: string;
-  creatorName?: string;
-  creatorEmail?: string;
-}
-
-// Persistent In-Memory Database Stores (Saved to Disk)
-const greetingsStore = new Map<string, GreetingRecord>(); // Keyed by canonical card id
-const shortIdIndex = new Map<string, string>(); // short_id -> card id
-const pagesStore = new Map<string, any>();
-const reactionsStore = new Map<string, any[]>();
-const chatStore = new Map<
-  string,
-  {
-    chatKey: string;
-    messages: any[];
-    createdAt: string;
-    expiresAt: string;
-  }
->();
-
-// Authentication & User Accounts Store
-export interface ServerUser {
-  id: string;
-  email: string;
-  name: string;
-  password?: string;
-  avatar?: string;
-  role: 'admin' | 'creator' | 'user' | 'guest';
-  provider: 'google' | 'email' | 'guest';
-  createdAt: string;
-  lastLoginAt?: string;
-}
-
-export const ADMIN_EMAIL = 'patelprit872008@gmail.com';
-const usersStore = new Map<string, ServerUser>();
-const tokensStore = new Map<string, ServerUser>();
-
-// Helper to generate unique 6-character short IDs (e.g., X7kP92)
-function generateShortId(): string {
+// Helper to generate unique 6-character short ID (e.g., X7kP92) verified against Neon DB
+async function generateUniqueShortId(): Promise<string> {
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
   for (let attempt = 0; attempt < 500; attempt++) {
     let result = '';
     for (let i = 0; i < 6; i++) {
       result += chars.charAt(Math.floor(Math.random() * chars.length));
     }
-    if (!shortIdIndex.has(result)) {
+    const existing = await getGreetingByShortId(result);
+    if (!existing) {
       return result;
     }
   }
   return `g${Date.now().toString(36).slice(-5)}`;
 }
 
-// Helper to resolve card ID from either short_id or full card ID
-function resolveCardId(idOrShortId: string): string {
-  if (!idOrShortId) return idOrShortId;
-  const clean = idOrShortId.trim();
-  if (shortIdIndex.has(clean)) {
-    return shortIdIndex.get(clean)!;
-  }
-  if (greetingsStore.has(clean)) {
-    return clean;
-  }
-  if (pagesStore.has(clean)) {
-    return clean;
-  }
-  // Check case-insensitive or iterate through greetings
-  for (const [cid, greeting] of greetingsStore.entries()) {
-    if (greeting.short_id === clean || greeting.id === clean || cid.toLowerCase() === clean.toLowerCase()) {
-      return cid;
-    }
-  }
-  for (const [pid, page] of pagesStore.entries()) {
-    if (page.short_id === clean || page.shortId === clean || page.id === clean || pid.toLowerCase() === clean.toLowerCase()) {
-      return pid;
-    }
-  }
-  return clean;
+// Helper to generate unique romantic room passkey
+function generateChatKey(): string {
+  const prefixes = ['LOVE', 'HEART', 'ROSE', 'KISS', 'DEAR', 'SWEET'];
+  const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
+  const num = Math.floor(1000 + Math.random() * 9000);
+  return `${prefix}-${num}`;
 }
 
-// Helper to save base64 / data URL media to persistent uploads disk directory
-function saveBase64ToUploads(dataUrl: string, originalName?: string): string {
-  try {
-    if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
-      return dataUrl;
-    }
-    const matches = dataUrl.match(/^data:([a-zA-Z0-9/+-]+);base64,(.+)$/);
-    if (!matches || matches.length !== 3) {
-      return dataUrl;
-    }
-    const mimeType = matches[1];
-    const base64Data = matches[2];
-    const buffer = Buffer.from(base64Data, 'base64');
-
-    let ext = 'bin';
-    if (mimeType.includes('jpeg') || mimeType.includes('jpg')) ext = 'jpg';
-    else if (mimeType.includes('png')) ext = 'png';
-    else if (mimeType.includes('webp')) ext = 'webp';
-    else if (mimeType.includes('gif')) ext = 'gif';
-    else if (mimeType.includes('svg')) ext = 'svg';
-    else if (mimeType.includes('mp3') || mimeType.includes('mpeg')) ext = 'mp3';
-    else if (mimeType.includes('wav')) ext = 'wav';
-    else if (mimeType.includes('webm')) ext = 'webm';
-    else if (mimeType.includes('ogg') || mimeType.includes('opus')) ext = 'ogg';
-    else if (mimeType.includes('m4a') || mimeType.includes('aac')) ext = 'm4a';
-    else if (mimeType.includes('mp4')) ext = 'mp4';
-
-    const safeName = `media_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
-    const filePath = path.join(UPLOADS_DIR, safeName);
-    fs.writeFileSync(filePath, buffer);
-    return `/uploads/${safeName}`;
-  } catch (e) {
-    console.error('Failed to save base64 media to persistent uploads:', e);
-    return dataUrl;
-  }
-}
-
-// Deep Media Sanitizer: converts any embedded data: base64 in project JSON to persistent /uploads/... URLs
-function deepSanitizeMedia(obj: any): any {
-  if (!obj) return obj;
-  if (typeof obj === 'string') {
-    if (obj.startsWith('data:') && obj.includes(';base64,')) {
-      return saveBase64ToUploads(obj);
-    }
-    return obj;
-  }
-  if (Array.isArray(obj)) {
-    return obj.map((item) => deepSanitizeMedia(item));
-  }
-  if (typeof obj === 'object') {
-    const sanitized: any = {};
-    for (const key of Object.keys(obj)) {
-      sanitized[key] = deepSanitizeMedia(obj[key]);
-    }
-    return sanitized;
-  }
-  return obj;
-}
-
-// Save all stores to disk
-function saveStoreToDisk() {
-  try {
-    const backup = {
-      greetings: Array.from(greetingsStore.entries()),
-      shortIds: Array.from(shortIdIndex.entries()),
-      pages: Array.from(pagesStore.entries()),
-      reactions: Array.from(reactionsStore.entries()),
-      chats: Array.from(chatStore.entries()),
-      users: Array.from(usersStore.entries()),
-      tokens: Array.from(tokensStore.entries()),
-    };
-    fs.writeFileSync(DATA_BACKUP_FILE, JSON.stringify(backup), 'utf8');
-  } catch (e) {
-    console.warn('Could not save data store to disk:', e);
-  }
-}
-
-// Load all stores from disk on boot
-function loadStoreFromDisk() {
-  try {
-    if (fs.existsSync(DATA_BACKUP_FILE)) {
-      const raw = fs.readFileSync(DATA_BACKUP_FILE, 'utf8');
-      const backup = JSON.parse(raw);
-      if (Array.isArray(backup.greetings)) {
-        for (const [k, v] of backup.greetings) {
-          greetingsStore.set(k, v);
-          if (v && v.short_id) {
-            shortIdIndex.set(v.short_id, k);
-          }
-        }
-      }
-      if (Array.isArray(backup.shortIds)) {
-        for (const [k, v] of backup.shortIds) {
-          shortIdIndex.set(k, v);
-        }
-      }
-      if (Array.isArray(backup.pages)) {
-        for (const [k, v] of backup.pages) pagesStore.set(k, v);
-      }
-      if (Array.isArray(backup.reactions)) {
-        for (const [k, v] of backup.reactions) reactionsStore.set(k, v);
-      }
-      if (Array.isArray(backup.chats)) {
-        for (const [k, v] of backup.chats) chatStore.set(k, v);
-      }
-      if (Array.isArray(backup.users)) {
-        for (const [k, v] of backup.users) usersStore.set(k, v);
-      }
-      if (Array.isArray(backup.tokens)) {
-        for (const [k, v] of backup.tokens) tokensStore.set(k, v);
-      }
-      console.log(`[Database] Loaded ${greetingsStore.size} greetings (${pagesStore.size} cards) from persistent disk storage.`);
-    }
-  } catch (e) {
-    console.warn('Could not load data store from disk:', e);
-  }
-}
-
-// Pre-seed Master Admin Account
-usersStore.set(ADMIN_EMAIL.toLowerCase(), {
-  id: 'user-admin-patelprit',
-  email: ADMIN_EMAIL,
-  name: 'Prit Patel',
-  avatar: '✨',
-  role: 'admin',
-  provider: 'google',
-  createdAt: new Date().toISOString(),
-  lastLoginAt: new Date().toISOString(),
-});
-
-// Restore previous data from disk
-loadStoreFromDisk();
-
-// 30-day TTL auto-deletion constant (30 days in milliseconds)
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
-
-// Periodic automatic cleanup of data older than 30 days
-function cleanupExpiredData() {
-  const now = Date.now();
-  let cleanedGreetings = 0;
-  let cleanedPages = 0;
-  let cleanedChats = 0;
-
-  for (const [id, greeting] of greetingsStore.entries()) {
-    const expireTime = greeting.expires_at ? new Date(greeting.expires_at).getTime() : 0;
-    if (expireTime && now > expireTime) {
-      if (greeting.short_id) shortIdIndex.delete(greeting.short_id);
-      greetingsStore.delete(id);
-      pagesStore.delete(id);
-      reactionsStore.delete(id);
-      cleanedGreetings++;
-    }
-  }
-
-  for (const [id, page] of pagesStore.entries()) {
-    const expireTime = page.expiresAt ? new Date(page.expiresAt).getTime() : 0;
-    if (expireTime && now > expireTime) {
-      pagesStore.delete(id);
-      reactionsStore.delete(id);
-      cleanedPages++;
-    }
-  }
-
-  for (const [id, chat] of chatStore.entries()) {
-    const expireTime = chat.expiresAt ? new Date(chat.expiresAt).getTime() : 0;
-    if (expireTime && now > expireTime) {
-      chatStore.delete(id);
-      cleanedChats++;
-    }
-  }
-
-  if (cleanedGreetings > 0 || cleanedPages > 0 || cleanedChats > 0) {
-    saveStoreToDisk();
-    console.log(`[Auto-Cleanup] Purged ${cleanedGreetings} expired greetings, ${cleanedPages} pages, and ${cleanedChats} chats (30-day TTL).`);
-  }
-}
-
-// Run cleanup every hour
-setInterval(cleanupExpiredData, 60 * 60 * 1000);
-
-// Lazy Gemini client
+// Lazy Gemini AI client
 let aiClient: GoogleGenAI | null = null;
 function getAIClient(): GoogleGenAI | null {
   if (!aiClient && process.env.GEMINI_API_KEY) {
@@ -361,6 +168,7 @@ function normalizeOccasionCategory(category: string, memories: string = '', note
   }
   return category || 'romantic';
 }
+
 // Localized Letter generator for AI Letter Writer fallback
 function getLocalizedLetterFallback(params: {
   senderName: string;
@@ -382,8 +190,6 @@ function getLocalizedLetterFallback(params: {
   const isHinglish = langLower === 'hinglish';
   const isGujarati = langLower === 'gujarati';
   const isGujlish = langLower === 'gujlish';
-  const isMarathi = langLower === 'marathi';
-  const isPunjabi = langLower === 'punjabi';
   const isSpanish = langLower === 'spanish' || langLower === 'español' || langLower === 'spanglish';
   const isFrench = langLower === 'french' || langLower === 'français';
 
@@ -409,7 +215,7 @@ function getLocalizedLetterFallback(params: {
     return `Dearest ${receiverName},\n\nFrom the moment our paths crossed, my world completely changed. You brought warmth, laughter, and a profound peace into my life that I had never known before.\n\nEvery dream I have of the future begins and ends with you. I want to celebrate every victory by your side, comfort you through every storm, and hold your hand through every season of life.\n\nWill you do me the greatest honor in this world, say YES, and be mine forever?\n\nForever and always yours,\n${senderName} 💍🌹`;
   }
 
-  // Romantic
+  // Romantic default fallback
   if (isGujarati) {
     return `વહાલી ${receiverName},\n\nતમારી સાથે વિતાવેલી દરેક પળ મારા માટે અનમોલ છે. તમારું સ્મિત મારા આખા દિવસનો થાક દૂર કરી દે છે અને તમારા સાથથી મને અપાર શાંતિ મળે છે.\n\nહું તમને દરેક ક્ષણે અનહદ પ્રેમ કરું છું અને હંમેશા કરતો રહીશ.\n\nખૂબ પ્રેમ સાથે,\n${senderName} 🌹`;
   }
@@ -426,7 +232,7 @@ function getLocalizedLetterFallback(params: {
   return `Dearest ${receiverName},\n\nEvery single day with you feels like a blessing. Your laughter brings warmth into my world, and your smile is the sweetest sight in my life.\n\nThank you for being my constant comfort and greatest adventure. No matter what comes our way, you have all my heart.\n\nForever yours,\n${senderName} 🌹`;
 }
 
-// Fallback card generator if Gemini API key is not present or API is unreachable
+// Fallback card generator if Gemini API is unreachable
 function generateFallbackCard(params: {
   senderName: string;
   receiverName: string;
@@ -439,9 +245,6 @@ function generateFallbackCard(params: {
   const {
     senderName = 'Someone Special',
     receiverName = 'My Favorite Person',
-    tone = 'romantic',
-    relationship = 'partner',
-    memories = '',
     language = 'English',
   } = params;
 
@@ -451,12 +254,9 @@ function generateFallbackCard(params: {
   const isHinglish = langLower === 'hinglish';
   const isGujarati = langLower === 'gujarati';
   const isGujlish = langLower === 'gujlish';
-  const isMarathi = langLower === 'marathi';
-  const isPunjabi = langLower === 'punjabi';
   const isSpanish = langLower === 'spanish' || langLower === 'español' || langLower === 'spanglish';
-  const isFrench = langLower === 'french' || langLower === 'français';
 
-  // 💍 DEDICATED PROPOSAL / PROPOSE FALLBACK
+  // Proposal Fallback
   if (normalizedCategory === 'proposal') {
     if (isGujarati) {
       return {
@@ -534,7 +334,7 @@ function generateFallbackCard(params: {
         ],
         letter: {
           title: `Maro Dil No Proposal Letter`,
-          body: `Dearest ${receiverName},\n\nKafli time thi aa vat mara dil ma hati. Tame mari life ma aavi ne badhu magical banavi didhu che.\n\nHu promise karu chu ke har ek mod par tamaro hath pakdine chalish. Will you be mine forever?`,
+          body: `Dearest ${receiverName},\n\nKafi time thi aa vat mara dil ma hati. Tame mari life ma aavi ne badhu magical banavi didhu che.\n\nHu promise karu chu ke har ek mod par tamaro hath pakdine chalish. Will you be mine forever?`,
           signature: `${senderName} 💍🌹`,
           date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
           handwrittenFont: 'font-dancing',
@@ -710,7 +510,7 @@ function generateFallbackCard(params: {
     };
   }
 
-  // Generic / Romantic / Other occasions
+  // Generic Romantic Fallback
   return {
     senderName,
     receiverName,
@@ -752,46 +552,60 @@ function generateFallbackCard(params: {
 }
 
 async function startServer() {
+  // 1. Initialize Neon PostgreSQL Database
+  await initDatabase();
+
+  // 2. Pre-seed Master Admin Account
+  await saveUser({
+    id: 'user-admin-patelprit',
+    email: ADMIN_EMAIL,
+    name: 'Prit Patel',
+    avatar: '👑',
+    role: 'admin',
+    provider: 'google',
+    createdAt: new Date().toISOString(),
+    lastLoginAt: new Date().toISOString(),
+  });
+
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json({ limit: '30mb' }));
+  app.use(express.json({ limit: '35mb' }));
   app.use('/uploads', express.static(UPLOADS_DIR));
 
-  // API: Media Upload to Persistent Disk Storage (Replaces blob/base64 references)
-  app.post('/api/upload', (req, res) => {
+  // ====================================================
+  // API: CLOUD MEDIA STORAGE UPLOAD (Direct & Permanent)
+  // ====================================================
+  app.post('/api/upload', async (req, res) => {
     try {
       const { dataUrl, filename } = req.body;
       if (!dataUrl || typeof dataUrl !== 'string') {
         return res.status(400).json({ error: 'Valid dataUrl is required' });
       }
-      const savedUrl = saveBase64ToUploads(dataUrl, filename);
-      return res.json({ success: true, url: savedUrl });
+      const cloudUrl = await uploadBase64ToCloud(dataUrl, filename);
+      return res.json({ success: true, url: cloudUrl });
     } catch (err: any) {
-      console.error('Media upload error:', err);
-      return res.status(500).json({ error: 'Failed to upload media file' });
+      console.error('Media upload to cloud storage error:', err);
+      return res.status(500).json({ error: 'Failed to upload media to cloud storage' });
     }
   });
 
-  // Helper to generate unique romantic room passkey
-  function generateChatKey(): string {
-    const prefixes = ['LOVE', 'HEART', 'ROSE', 'KISS', 'DEAR', 'SWEET'];
-    const prefix = prefixes[Math.floor(Math.random() * prefixes.length)];
-    const num = Math.floor(1000 + Math.random() * 9000);
-    return `${prefix}-${num}`;
-  }
-
-  // API 1: Health check
+  // API: Health check with Database & Storage status
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({
+      status: 'ok',
+      database: isDatabaseConnected() ? 'neon_postgresql_connected' : 'local_store_fallback',
+      storage: isCloudinaryActive() ? 'cloudinary' : 'disk_storage_fallback',
+      timestamp: new Date().toISOString(),
+    });
   });
 
   // ==========================================
   // AUTHENTICATION & ADMIN API ROUTES
   // ==========================================
 
-  // Auth 1: Email / Password Sign In (Strict registered password check; Admin bypass for patelprit872008@gmail.com)
-  app.post('/api/auth/login', (req, res) => {
+  // Auth 1: Email / Password Sign In
+  app.post('/api/auth/login', async (req, res) => {
     const { email = '', password = '' } = req.body;
     const normalizedEmail = (email || '').trim().toLowerCase();
 
@@ -799,11 +613,11 @@ async function startServer() {
       return res.status(400).json({ error: 'Email is required' });
     }
 
-    // ⭐ MASTER ADMIN: If admin email (patelprit872008@gmail.com) logs in, password is optional/bypassed
+    // Master Admin Bypass for patelprit872008@gmail.com
     if (normalizedEmail === ADMIN_EMAIL.toLowerCase()) {
-      let admin = usersStore.get(ADMIN_EMAIL.toLowerCase());
+      let admin = await getUserByEmail(ADMIN_EMAIL);
       if (!admin) {
-        admin = {
+        admin = await saveUser({
           id: 'user-admin-patelprit',
           email: ADMIN_EMAIL,
           name: 'Prit Patel',
@@ -812,13 +626,13 @@ async function startServer() {
           provider: 'email',
           createdAt: new Date().toISOString(),
           lastLoginAt: new Date().toISOString(),
-        };
-        usersStore.set(ADMIN_EMAIL.toLowerCase(), admin);
+        });
       } else {
         admin.lastLoginAt = new Date().toISOString();
+        await saveUser(admin);
       }
       const token = `tok_admin_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      tokensStore.set(token, admin);
+      saveUserToken(token, admin);
 
       return res.json({
         success: true,
@@ -830,24 +644,24 @@ async function startServer() {
       });
     }
 
-    // 🔒 REGULAR USERS: Password is strictly MANDATORY and must match registered password
     if (!password || !password.trim()) {
       return res.status(400).json({ error: 'Password is required to sign in' });
     }
 
-    let user = usersStore.get(normalizedEmail);
+    let user = await getUserByEmail(normalizedEmail);
     if (!user) {
       return res.status(404).json({ error: 'No account found with this email. Please register first.' });
     }
 
-    // Existing user must enter the exact previously registered password
     if (user.password && user.password !== password) {
       return res.status(401).json({ error: 'Incorrect password! Only the previously registered password is valid.' });
     }
 
     user.lastLoginAt = new Date().toISOString();
+    await saveUser(user);
+
     const token = `tok_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    tokensStore.set(token, user);
+    saveUserToken(token, user);
 
     return res.json({
       success: true,
@@ -868,7 +682,7 @@ async function startServer() {
     return res.json({ clientId });
   });
 
-  // Auth 2.2: OAuth Callback HTML for Popup & Redirects
+  // Auth 2.2: OAuth Callback HTML
   app.get(['/auth/callback', '/auth/callback/'], (req, res) => {
     res.send(`
       <!DOCTYPE html>
@@ -901,9 +715,9 @@ async function startServer() {
     `);
   });
 
-  // Auth 2: Google Sign In (One-Tap & Account Picker)
-  app.post('/api/auth/google', (req, res) => {
-    const { email = '', name = '', avatar = '', googleId = '' } = req.body;
+  // Auth 2: Google Sign In
+  app.post('/api/auth/google', async (req, res) => {
+    const { email = '', name = '', avatar = '' } = req.body;
     const normalizedEmail = (email || '').trim().toLowerCase();
 
     if (!normalizedEmail) {
@@ -911,10 +725,10 @@ async function startServer() {
     }
 
     const isAdmin = normalizedEmail === ADMIN_EMAIL.toLowerCase();
-    let user = usersStore.get(normalizedEmail);
+    let user = await getUserByEmail(normalizedEmail);
 
     if (!user) {
-      user = {
+      user = await saveUser({
         id: `user-g-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         email: email.trim(),
         name: name || (isAdmin ? 'Prit Patel' : email.split('@')[0] || 'Google User'),
@@ -923,18 +737,18 @@ async function startServer() {
         provider: 'google',
         createdAt: new Date().toISOString(),
         lastLoginAt: new Date().toISOString(),
-      };
-      usersStore.set(normalizedEmail, user);
+      });
     } else {
       user.lastLoginAt = new Date().toISOString();
       if (isAdmin) {
         user.role = 'admin';
         user.avatar = '👑';
       }
+      await saveUser(user);
     }
 
     const token = `tok_g_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    tokensStore.set(token, user);
+    saveUserToken(token, user);
 
     return res.json({
       success: true,
@@ -946,7 +760,7 @@ async function startServer() {
   });
 
   // Auth 3: Register new user
-  app.post('/api/auth/register', (req, res) => {
+  app.post('/api/auth/register', async (req, res) => {
     const { email = '', password = '', name = '' } = req.body;
     const normalizedEmail = (email || '').trim().toLowerCase();
 
@@ -955,12 +769,12 @@ async function startServer() {
     }
 
     const isAdmin = normalizedEmail === ADMIN_EMAIL.toLowerCase();
-
     if (!isAdmin && (!password || password.trim().length < 4)) {
       return res.status(400).json({ error: 'Password is required (minimum 4 characters)' });
     }
 
-    if (usersStore.has(normalizedEmail)) {
+    const existingUser = await getUserByEmail(normalizedEmail);
+    if (existingUser) {
       return res.status(400).json({ error: 'An account with this email already exists. Please sign in.' });
     }
 
@@ -976,9 +790,9 @@ async function startServer() {
       lastLoginAt: new Date().toISOString(),
     };
 
-    usersStore.set(normalizedEmail, user);
+    await saveUser(user);
     const token = `tok_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    tokensStore.set(token, user);
+    saveUserToken(token, user);
 
     return res.json({
       success: true,
@@ -989,7 +803,7 @@ async function startServer() {
   });
 
   // Auth 4: Guest Login
-  app.post('/api/auth/guest', (req, res) => {
+  app.post('/api/auth/guest', async (req, res) => {
     const guestNumber = Math.floor(1000 + Math.random() * 9000);
     const guestId = `guest-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
     const guestUser: ServerUser = {
@@ -1003,9 +817,9 @@ async function startServer() {
       lastLoginAt: new Date().toISOString(),
     };
 
-    usersStore.set(guestUser.email, guestUser);
+    await saveUser(guestUser);
     const token = `tok_guest_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    tokensStore.set(token, guestUser);
+    saveUserToken(token, guestUser);
 
     return res.json({
       success: true,
@@ -1015,16 +829,20 @@ async function startServer() {
     });
   });
 
-  // Auth 5: Current User Session Check
+  // Auth 5: Session Check
   app.get('/api/auth/me', (req, res) => {
     const authHeader = req.headers.authorization || '';
     const token = authHeader.replace('Bearer ', '').trim() || (req.query.token as string);
 
-    if (!token || !tokensStore.has(token)) {
+    if (!token) {
       return res.status(401).json({ authenticated: false });
     }
 
-    const user = tokensStore.get(token)!;
+    const user = getUserByToken(token);
+    if (!user) {
+      return res.status(401).json({ authenticated: false });
+    }
+
     const isAdmin = user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || user.role === 'admin';
 
     return res.json({
@@ -1039,43 +857,50 @@ async function startServer() {
     const authHeader = req.headers.authorization || '';
     const token = authHeader.replace('Bearer ', '').trim() || (req.body?.token as string);
 
-    if (token && tokensStore.has(token)) {
-      tokensStore.delete(token);
+    if (token) {
+      deleteUserToken(token);
     }
     return res.json({ success: true });
   });
 
   // Auth 6: Master Admin Stats & Management
-  app.get('/api/admin/stats', (req, res) => {
+  app.get('/api/admin/stats', async (req, res) => {
     const authHeader = req.headers.authorization || '';
     const token = authHeader.replace('Bearer ', '').trim() || (req.query.token as string);
-    const user = token ? tokensStore.get(token) : null;
+    const user = token ? getUserByToken(token) : null;
 
     if (!user || (user.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase() && user.role !== 'admin')) {
       return res.status(403).json({ error: 'Access denied. Master Admin credentials required.' });
     }
 
-    cleanupExpiredData();
+    const allCards = await listAllGreetings();
+    const allUsers = await listAllUsers();
 
-    const allCards = Array.from(greetingsStore.values()).map((g) => ({
-      id: g.id,
-      short_id: g.short_id,
-      title: g.title || 'Untitled Card',
-      theme: g.project_json?.theme,
-      senderName: g.project_json?.hero?.senderName || 'Anonymous',
-      receiverName: g.project_json?.hero?.receiverName || g.project_json?.hero?.receiverNickname || 'Special One',
-      creatorEmail: g.creatorEmail || 'Anonymous',
-      creatorName: g.creatorName || g.project_json?.hero?.senderName || 'Anonymous',
-      createdAt: g.created_at,
-      expiresAt: g.expires_at,
-      chatKey: g.chatKey,
-      view_count: g.view_count || 0,
-      reactionCount: (reactionsStore.get(g.id) || []).length,
-      chatMessageCount: (chatStore.get(g.id)?.messages || []).length,
-    }));
+    const formattedCards = await Promise.all(
+      allCards.map(async (g) => {
+        const reactions = await getReactions(g.id);
+        const messages = await getChatMessages(g.id);
+        return {
+          id: g.id,
+          short_id: g.short_id,
+          title: g.title || 'Untitled Card',
+          theme: g.project_json?.theme,
+          senderName: g.project_json?.hero?.senderName || 'Anonymous',
+          receiverName: g.project_json?.hero?.receiverName || g.project_json?.hero?.receiverNickname || 'Special One',
+          creatorEmail: g.creatorEmail || 'Anonymous',
+          creatorName: g.creatorName || g.project_json?.hero?.senderName || 'Anonymous',
+          createdAt: g.created_at,
+          expiresAt: g.expires_at,
+          chatKey: g.chatKey,
+          view_count: g.view_count || 0,
+          reactionCount: reactions.length,
+          chatMessageCount: messages.length,
+        };
+      })
+    );
 
-    const allUsers = Array.from(usersStore.values()).map((u) => {
-      const userCards = Array.from(greetingsStore.values()).filter(
+    const formattedUsers = allUsers.map((u) => {
+      const userCards = allCards.filter(
         (g) =>
           (g.creatorEmail && g.creatorEmail.toLowerCase() === u.email.toLowerCase()) ||
           (g.owner_id && g.owner_id === u.id)
@@ -1096,43 +921,65 @@ async function startServer() {
     return res.json({
       success: true,
       adminEmail: ADMIN_EMAIL,
+      database: isDatabaseConnected() ? 'neon_postgresql' : 'local_store',
       stats: {
-        totalCards: greetingsStore.size,
-        totalReactions: Array.from(reactionsStore.values()).reduce((acc, curr) => acc + curr.length, 0),
-        totalSecretChats: chatStore.size,
-        totalUsers: usersStore.size,
+        totalCards: allCards.length,
+        totalUsers: allUsers.length,
         serverUptime: process.uptime(),
-        ttlDays: 30,
       },
-      cards: allCards,
-      users: allUsers,
+      cards: formattedCards,
+      users: formattedUsers,
     });
-  });  // Admin Card Delete API
-  app.delete('/api/admin/cards/:id', (req, res) => {
-    const cardId = resolveCardId(req.params.id);
+  });
+
+  // Admin Card Delete API
+  app.delete('/api/admin/cards/:id', async (req, res) => {
+    const rawId = req.params.id;
     const authHeader = req.headers.authorization || '';
     const token = authHeader.replace('Bearer ', '').trim();
-    const user = token ? tokensStore.get(token) : null;
+    const user = token ? getUserByToken(token) : null;
 
     if (!user || (user.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase() && user.role !== 'admin')) {
       return res.status(403).json({ error: 'Access denied. Master Admin credentials required.' });
     }
 
-    const greeting = greetingsStore.get(cardId);
-    if (greeting && greeting.short_id) {
-      shortIdIndex.delete(greeting.short_id);
+    const greeting = (await getGreetingById(rawId)) || (await getGreetingByShortId(rawId));
+    if (greeting) {
+      await deleteGreeting(greeting.id);
     }
-    greetingsStore.delete(cardId);
-    pagesStore.delete(cardId);
-    reactionsStore.delete(cardId);
-    chatStore.delete(cardId);
-    saveStoreToDisk();
 
-    return res.json({ success: true, message: `Card ${cardId} deleted by Admin` });
+    return res.json({ success: true, message: `Card ${rawId} deleted by Admin` });
   });
 
-  // Reusable Publisher Logic (Clean server-side publishing with media sanitization & short ID)
-  function handleGreetingPublish(req: express.Request, res: express.Response) {
+  // Admin Manual Purge / Cleanup Expired Cards & Chats (30-day card retention + 12-hour chat purge)
+  app.post('/api/admin/cleanup-expired', async (req, res) => {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.replace('Bearer ', '').trim();
+    const user = token ? getUserByToken(token) : null;
+
+    if (!user || (user.email.toLowerCase() !== ADMIN_EMAIL.toLowerCase() && user.role !== 'admin')) {
+      return res.status(403).json({ error: 'Access denied. Master Admin credentials required.' });
+    }
+
+    try {
+      const stats = await runRetentionPolicyWorker();
+      return res.json({
+        success: true,
+        purgedCards: stats.expiredCards,
+        purgedChats: stats.expiredChats,
+        purgedMessages: stats.expiredChatMessages,
+        message: `Retention worker executed: Purged ${stats.expiredCards} expired cards (> 30 days) and ${stats.expiredChats} chat rooms / ${stats.expiredChatMessages} messages (> 12 hours since exit), and cleaned up associated Cloudinary media.`,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: 'Cleanup worker failed', details: err?.message });
+    }
+  });
+
+  // ==============================================================
+  // PUBLISHING & RECEIVER ENDPOINTS (NEON POSTGRESQL + CLOUD MEDIA)
+  // ==============================================================
+
+  async function handleGreetingPublish(req: express.Request, res: express.Response) {
     try {
       const payload = req.body.project_json || req.body.greeting || req.body;
       if (!payload || (!payload.id && !req.body.id)) {
@@ -1145,37 +992,46 @@ async function startServer() {
       // Check Authentication or resolve creator session
       const authHeader = req.headers.authorization || '';
       const token = authHeader.replace('Bearer ', '').trim() || (req.query.token as string);
-      let user = token ? tokensStore.get(token) : null;
+      let user = token ? getUserByToken(token) : null;
 
-      const creatorEmail = (payload.creatorEmail || req.body.creatorEmail || user?.email || 'creator@misha.app').trim().toLowerCase();
-      const creatorName = payload.creatorName || req.body.creatorName || user?.name || payload.hero?.senderName || 'Creator';
+      const creatorEmail = (
+        payload.creatorEmail ||
+        req.body.creatorEmail ||
+        user?.email ||
+        'creator@misha.app'
+      ).trim().toLowerCase();
+
+      const creatorName =
+        payload.creatorName ||
+        req.body.creatorName ||
+        user?.name ||
+        payload.hero?.senderName ||
+        'Creator';
 
       if (!user) {
-        if (usersStore.has(creatorEmail)) {
-          user = usersStore.get(creatorEmail)!;
-        } else {
-          user = {
+        user = await getUserByEmail(creatorEmail);
+        if (!user) {
+          user = await saveUser({
             id: `user-${Date.now().toString(36)}`,
             email: creatorEmail,
             name: creatorName,
             role: creatorEmail === ADMIN_EMAIL.toLowerCase() ? 'admin' : 'creator',
             provider: 'email',
             createdAt: new Date().toISOString(),
-          };
-          usersStore.set(creatorEmail, user);
+          });
         }
         if (token) {
-          tokensStore.set(token, user);
+          saveUserToken(token, user);
         }
       }
 
-      // 1. Deeply sanitize and store all media files (Photos, Audio, Voice notes) permanently on disk
-      const sanitizedProject = deepSanitizeMedia(payload);
+      // 1. Upload ALL media files (Photos, Audio, Voice notes, Stickers) to Cloud Storage
+      const sanitizedProject = await deepSanitizeAndUploadMedia(payload);
 
-      // 2. Generate or reuse unique short ID (e.g. X7kP92)
-      let shortId = sanitizedProject.short_id || sanitizedProject.shortId || greetingsStore.get(cardId)?.short_id;
+      // 2. Generate or reuse unique 6-character short ID (e.g. X7kP92)
+      let shortId = sanitizedProject.short_id || sanitizedProject.shortId;
       if (!shortId || typeof shortId !== 'string' || shortId.length > 12) {
-        shortId = generateShortId();
+        shortId = await generateUniqueShortId();
       }
       sanitizedProject.short_id = shortId;
       sanitizedProject.shortId = shortId;
@@ -1184,9 +1040,11 @@ async function startServer() {
       const createdAt = sanitizedProject.createdAt || now.toISOString();
       const expiresAt =
         sanitizedProject.expiresAt ||
-        new Date(now.getTime() + THIRTY_DAYS_MS).toISOString();
+        new Date(new Date(createdAt).getTime() + CARD_RETENTION_MS).toISOString();
       const chatKey = (sanitizedProject.chatKey || generateChatKey()).trim().toUpperCase();
       sanitizedProject.chatKey = chatKey;
+      sanitizedProject.expiresAt = expiresAt;
+      sanitizedProject.retentionDays = CARD_RETENTION_DAYS;
 
       const title =
         sanitizedProject.hero?.mainTitle ||
@@ -1205,6 +1063,7 @@ async function startServer() {
         chatKey,
         createdAt,
         expiresAt,
+        retentionDays: CARD_RETENTION_DAYS,
         savedAt: now.toISOString(),
       };
 
@@ -1219,37 +1078,23 @@ async function startServer() {
         created_at: createdAt,
         updated_at: now.toISOString(),
         expires_at: expiresAt,
-        view_count: greetingsStore.get(cardId)?.view_count || 0,
+        view_count: 0,
         chatKey,
         creatorName: user.name,
         creatorEmail: user.email,
       };
 
-      // Save to database stores & indices
-      greetingsStore.set(cardId, record);
-      shortIdIndex.set(shortId, cardId);
-      pagesStore.set(cardId, fullPageData);
-
-      // Initialize or update secret chat room
-      const existingChat = chatStore.get(cardId);
-      if (!existingChat) {
-        chatStore.set(cardId, {
-          chatKey,
-          messages: [],
-          createdAt,
-          expiresAt,
-        });
-      } else {
-        existingChat.chatKey = chatKey;
-        existingChat.expiresAt = expiresAt;
-      }
-
-      // Persist all stores to disk immediately
-      saveStoreToDisk();
+      // 3. Save to Neon PostgreSQL Database
+      await saveGreeting(record);
 
       const origin = req.headers.origin || `http://${req.headers.host}`;
       const publishedUrl = `${origin}/g/${shortId}`;
       const directChatUrl = `${origin}/g/${shortId}?chat=1&key=${chatKey}`;
+
+      const daysRemaining = Math.max(
+        0,
+        Math.ceil((new Date(record.expires_at || expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+      );
 
       return res.json({
         success: true,
@@ -1261,8 +1106,10 @@ async function startServer() {
         title: record.title,
         chatKey,
         createdAt,
-        expiresAt,
-        expires_at: expiresAt,
+        expiresAt: record.expires_at,
+        expires_at: record.expires_at,
+        retentionDays: CARD_RETENTION_DAYS,
+        daysRemaining,
         view_count: record.view_count,
         greeting: record,
         project_json: fullPageData,
@@ -1273,115 +1120,87 @@ async function startServer() {
     }
   }
 
-  // API 2: Publish Greeting endpoints (Server-backed publishing)
+  // Publish Greeting API
   app.post('/api/greetings/publish', (req, res) => handleGreetingPublish(req, res));
   app.post('/api/pages', (req, res) => handleGreetingPublish(req, res));
 
-  // Reusable Greeting Retrieval Logic (Look up by short_id or card_id)
-  function handleGreetingGet(req: express.Request, res: express.Response) {
+  // Reusable Greeting Retrieval Logic from Neon PostgreSQL
+  async function handleGreetingGet(req: express.Request, res: express.Response) {
     const rawParam = req.params.shortId || req.params.id;
-    cleanupExpiredData();
 
-    const cardId = resolveCardId(rawParam);
-    const greeting = greetingsStore.get(cardId);
-    const page = pagesStore.get(cardId) || greeting?.project_json;
+    const greeting = (await getGreetingByShortId(rawParam)) || (await getGreetingById(rawParam));
 
-    if (!page && !greeting) {
-      return res.status(404).json({ error: 'Greeting not found or expired' });
-    }
-
-    const expiresAt = greeting?.expires_at || page?.expiresAt;
-    if (expiresAt && Date.now() > new Date(expiresAt).getTime()) {
-      if (greeting && greeting.short_id) {
-        shortIdIndex.delete(greeting.short_id);
-      }
-      greetingsStore.delete(cardId);
-      pagesStore.delete(cardId);
-      reactionsStore.delete(cardId);
-      chatStore.delete(cardId);
-      saveStoreToDisk();
-      return res.status(404).json({ error: 'Greeting has expired (30-day TTL)' });
+    if (!greeting) {
+      return res.status(404).json({
+        error: 'Greeting card not found or expired after 30 days retention period.',
+        expired: true,
+      });
     }
 
     // Increment view count
-    if (greeting) {
-      greeting.view_count = (greeting.view_count || 0) + 1;
-      saveStoreToDisk();
-    }
+    const updatedViewCount = await incrementGreetingViewCount(greeting.id);
+    greeting.view_count = updatedViewCount;
 
-    const projectData = greeting?.project_json || page;
-    const shortId = greeting?.short_id || projectData?.short_id || rawParam;
+    const projectData = greeting.project_json || {};
+    const shortId = greeting.short_id || projectData.short_id || rawParam;
+    const expiresAt = greeting.expires_at || projectData.expiresAt;
+    const daysRemaining = expiresAt
+      ? Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+      : CARD_RETENTION_DAYS;
 
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     return res.json({
       success: true,
-      id: cardId,
+      id: greeting.id,
       short_id: shortId,
       shortId: shortId,
-      title: greeting?.title || projectData?.title || 'A Special Greeting',
-      view_count: greeting?.view_count || 1,
-      created_at: greeting?.created_at || projectData?.createdAt,
-      expires_at: greeting?.expires_at || projectData?.expiresAt,
-      status: greeting?.status || 'published',
-      visibility: greeting?.visibility || 'public',
-      chatKey: greeting?.chatKey || projectData?.chatKey,
+      title: greeting.title || projectData.title || 'A Special Greeting',
+      view_count: updatedViewCount,
+      created_at: greeting.created_at || projectData.createdAt,
+      expires_at: expiresAt,
+      retentionDays: CARD_RETENTION_DAYS,
+      daysRemaining,
+      status: greeting.status || 'published',
+      visibility: greeting.visibility || 'public',
+      chatKey: greeting.chatKey || projectData.chatKey,
       project_json: projectData,
       ...projectData,
     });
   }
 
-  // API 3: Get Greeting by Short ID or Canonical ID
+  // Get Greeting by Short ID or Canonical ID
   app.get('/api/g/:shortId', (req, res) => handleGreetingGet(req, res));
   app.get('/api/greetings/:shortId', (req, res) => handleGreetingGet(req, res));
   app.get('/api/pages/:id', (req, res) => handleGreetingGet(req, res));
 
-  // API 4: Record receiver reaction
-  app.post('/api/pages/:id/reaction', (req, res) => {
-    const cardId = resolveCardId(req.params.id);
+  // Record receiver reaction
+  app.post('/api/pages/:id/reaction', async (req, res) => {
+    const rawId = req.params.id;
     const { reaction, customNote } = req.body;
+    const greeting = (await getGreetingById(rawId)) || (await getGreetingByShortId(rawId));
+    const targetId = greeting ? greeting.id : rawId;
 
-    const existing = reactionsStore.get(cardId) || [];
-    existing.push({
-      reaction,
-      customNote,
-      timestamp: new Date().toISOString(),
-    });
-    reactionsStore.set(cardId, existing);
+    const saved = await saveReaction(targetId, reaction, customNote);
+    const all = await getReactions(targetId);
 
-    // Also optionally post reaction into secret chat room
-    const chat = chatStore.get(cardId);
-    if (chat) {
-      chat.messages.push({
-        id: `react-${Date.now()}`,
-        sender: 'receiver',
-        senderName: 'Your Special One',
-        text: `Reacted with ${reaction} ${customNote ? `— "${customNote}"` : ''}`,
-        timestamp: new Date().toISOString(),
-        status: 'read',
-      });
-    }
-
-    saveStoreToDisk();
-
-    return res.json({ success: true, count: existing.length });
+    return res.json({ success: true, count: all.length, item: saved });
   });
 
-  // API 4.1: Secret Chat Key Verification
-  app.post('/api/chat/:id/auth', (req, res) => {
-    const cardId = resolveCardId(req.params.id);
+  // Secret Chat Key Verification
+  app.post('/api/chat/:id/auth', async (req, res) => {
+    const rawId = req.params.id;
     const { chatKey } = req.body;
-    cleanupExpiredData();
 
-    const page = pagesStore.get(cardId) || greetingsStore.get(cardId)?.project_json;
-    const chat = chatStore.get(cardId);
-    const correctKey = (page?.chatKey || chat?.chatKey || '').trim().toUpperCase();
-
-    if (!correctKey) {
+    const greeting = (await getGreetingById(rawId)) || (await getGreetingByShortId(rawId));
+    if (!greeting) {
       return res.status(404).json({ error: 'Chat room not found for this card' });
     }
 
+    const page = greeting.project_json || {};
+    const correctKey = (greeting.chatKey || page.chatKey || '').trim().toUpperCase();
+
     const providedKey = (chatKey || '').trim().toUpperCase();
-    const isAuthorized = providedKey === correctKey || providedKey === 'MISHA143';
+    const isAuthorized = !correctKey || providedKey === correctKey || providedKey === 'MISHA143';
     if (!isAuthorized) {
       return res.status(401).json({
         success: false,
@@ -1392,49 +1211,46 @@ async function startServer() {
     return res.json({
       success: true,
       verified: true,
-      cardId,
+      cardId: greeting.id,
       chatKey: correctKey,
       senderName: page?.hero?.senderName || 'Sender',
       receiverName: page?.hero?.receiverName || page?.hero?.receiverNickname || 'Receiver',
       theme: page?.theme || 'rose-romance',
-      expiresAt: page?.expiresAt || chat?.expiresAt,
+      expiresAt: greeting.expires_at,
     });
   });
 
-  // API 4.2: Get Secret Chat Messages (Protected by Key)
-  app.get('/api/chat/:id/messages', (req, res) => {
-    const cardId = resolveCardId(req.params.id);
+  // Get Secret Chat Messages
+  app.get('/api/chat/:id/messages', async (req, res) => {
+    const rawId = req.params.id;
     const queryKey = (
       (req.query.key as string) ||
       (req.headers['x-chat-key'] as string) ||
       ''
     ).trim().toUpperCase();
 
-    cleanupExpiredData();
-
-    const page = pagesStore.get(cardId) || greetingsStore.get(cardId)?.project_json;
-    const chat = chatStore.get(cardId);
-    const correctKey = (page?.chatKey || chat?.chatKey || '').trim().toUpperCase();
-
-    if (!correctKey) {
+    const greeting = (await getGreetingById(rawId)) || (await getGreetingByShortId(rawId));
+    if (!greeting) {
       return res.status(404).json({ error: 'Chat room not found' });
     }
 
-    const isAuthorized = queryKey === correctKey || queryKey === 'MISHA143';
+    const correctKey = (greeting.chatKey || greeting.project_json?.chatKey || '').trim().toUpperCase();
+    const isAuthorized = !correctKey || queryKey === correctKey || queryKey === 'MISHA143';
     if (!isAuthorized) {
       return res.status(401).json({ error: 'Invalid Secret Passkey' });
     }
 
+    const messages = await getChatMessages(greeting.id);
     return res.json({
       success: true,
-      messages: chat ? chat.messages : [],
-      expiresAt: page?.expiresAt || chat?.expiresAt,
+      messages,
+      expiresAt: greeting.expires_at,
     });
   });
 
-  // API 4.3: Send Secret Chat Message (Protected by Key)
-  app.post('/api/chat/:id/messages', (req, res) => {
-    const cardId = resolveCardId(req.params.id);
+  // Send Secret Chat Message
+  app.post('/api/chat/:id/messages', async (req, res) => {
+    const rawId = req.params.id;
     const {
       chatKey = '',
       sender = 'creator',
@@ -1447,31 +1263,22 @@ async function startServer() {
       duration,
     } = req.body;
 
-    const page = pagesStore.get(cardId) || greetingsStore.get(cardId)?.project_json;
-    let chat = chatStore.get(cardId);
-    const correctKey = (page?.chatKey || chat?.chatKey || '').trim().toUpperCase();
+    const greeting = (await getGreetingById(rawId)) || (await getGreetingByShortId(rawId));
+    if (!greeting) {
+      return res.status(404).json({ error: 'Card not found' });
+    }
 
+    const correctKey = (greeting.chatKey || greeting.project_json?.chatKey || '').trim().toUpperCase();
     const providedKey = (chatKey || '').trim().toUpperCase();
     const isAuthorized = !correctKey || providedKey === correctKey || providedKey === 'MISHA143';
     if (!isAuthorized) {
       return res.status(401).json({ error: 'Invalid Secret Passkey' });
     }
 
-    if (!chat) {
-      const now = new Date();
-      chat = {
-        chatKey: correctKey || providedKey,
-        messages: [],
-        createdAt: now.toISOString(),
-        expiresAt: new Date(now.getTime() + THIRTY_DAYS_MS).toISOString(),
-      };
-      chatStore.set(cardId, chat);
-    }
-
-    // If mediaUrl is base64, save to persistent storage
+    // If mediaUrl is base64, save to Cloud Storage
     let persistentMediaUrl = mediaUrl;
     if (mediaUrl && typeof mediaUrl === 'string' && mediaUrl.startsWith('data:')) {
-      persistentMediaUrl = saveBase64ToUploads(mediaUrl);
+      persistentMediaUrl = await uploadBase64ToCloud(mediaUrl);
     }
 
     const newMsg = {
@@ -1488,8 +1295,7 @@ async function startServer() {
       status: 'delivered',
     };
 
-    chat.messages.push(newMsg);
-    saveStoreToDisk();
+    await saveChatMessage(greeting.id, newMsg);
 
     return res.json({
       success: true,
@@ -1497,73 +1303,66 @@ async function startServer() {
     });
   });
 
-  // API 4.4: React to a Chat Message (Protected by Key)
-  app.post('/api/chat/:id/react', (req, res) => {
-    const cardId = resolveCardId(req.params.id);
-    const { chatKey = '', messageId, reaction } = req.body;
-
-    const page = pagesStore.get(cardId) || greetingsStore.get(cardId)?.project_json;
-    const chat = chatStore.get(cardId);
-    const correctKey = (page?.chatKey || chat?.chatKey || '').trim().toUpperCase();
-
-    if (correctKey && chatKey.trim().toUpperCase() !== correctKey) {
-      return res.status(401).json({ error: 'Invalid Secret Passkey' });
+  // Participant Joins Secret Chat Room
+  app.post('/api/chat/:id/join', async (req, res) => {
+    const rawId = req.params.id;
+    const { deviceId } = req.body || {};
+    const greeting = (await getGreetingById(rawId)) || (await getGreetingByShortId(rawId));
+    if (!greeting) {
+      return res.status(404).json({ error: 'Card not found' });
     }
-
-    if (chat && chat.messages) {
-      const msg = chat.messages.find((m) => m.id === messageId);
-      if (msg) {
-        msg.reaction = reaction;
-        saveStoreToDisk();
-        return res.json({ success: true, message: msg });
-      }
-    }
-
-    return res.status(404).json({ error: 'Message not found' });
+    await recordChatJoin(greeting.id, deviceId);
+    return res.json({
+      success: true,
+      message: 'Participant joined chat room',
+      retentionHours: CHAT_RETENTION_HOURS,
+    });
   });
 
-  // API 4.5: Ephemeral Chat Wipe / Clear on Exit (Instant wipe on leave)
-  app.post('/api/chat/:id/clear', (req, res) => {
-    const cardId = resolveCardId(req.params.id);
-    const { chatKey = '' } = req.body || {};
-
-    const page = pagesStore.get(cardId) || greetingsStore.get(cardId)?.project_json;
-    const chat = chatStore.get(cardId);
-    const correctKey = (page?.chatKey || chat?.chatKey || '').trim().toUpperCase();
-    const cleanKey = (chatKey || '').trim().toUpperCase();
-
-    // If key provided, check it; otherwise allow exit wipe
-    if (correctKey && cleanKey && cleanKey !== correctKey && cleanKey !== 'MISHA143') {
-      return res.status(401).json({ error: 'Invalid Secret Passkey' });
+  // Participant Exits Secret Chat Room (Starts 12-hour auto-purge countdown)
+  app.post('/api/chat/:id/exit', async (req, res) => {
+    const rawId = req.params.id;
+    const { deviceId } = req.body || {};
+    const greeting = (await getGreetingById(rawId)) || (await getGreetingByShortId(rawId));
+    if (!greeting) {
+      return res.status(404).json({ error: 'Card not found' });
     }
-
-    if (chat) {
-      chat.messages = [];
-    }
-    chatStore.delete(cardId);
-    saveStoreToDisk();
-
-    return res.json({ success: true, message: 'Chat room messages wiped clean on exit' });
+    await recordChatExit(greeting.id, deviceId);
+    return res.json({
+      success: true,
+      message: 'Chat exit recorded. 12-hour auto-purge timer is active.',
+      retentionHours: CHAT_RETENTION_HOURS,
+    });
   });
 
-  app.delete('/api/chat/:id/messages', (req, res) => {
-    const cardId = resolveCardId(req.params.id);
-    const chat = chatStore.get(cardId);
-    if (chat) {
-      chat.messages = [];
+  // Wipe / Clear Secret Chat Messages Manually or on Immediate Leave
+  app.post('/api/chat/:id/clear', async (req, res) => {
+    const rawId = req.params.id;
+    const greeting = (await getGreetingById(rawId)) || (await getGreetingByShortId(rawId));
+    if (greeting) {
+      await clearChatMessages(greeting.id, true);
     }
-    chatStore.delete(cardId);
-    saveStoreToDisk();
-    return res.json({ success: true, message: 'Chat room messages deleted' });
+    return res.json({ success: true, message: 'Chat room messages and media wiped clean' });
   });
 
-  // API 5: Complete AI Card Generator (creates entire HeartPage content with Gemini 3.6 Flash)
+  app.delete('/api/chat/:id/messages', async (req, res) => {
+    const rawId = req.params.id;
+    const greeting = (await getGreetingById(rawId)) || (await getGreetingByShortId(rawId));
+    if (greeting) {
+      await clearChatMessages(greeting.id, true);
+    }
+    return res.json({ success: true, message: 'Chat room messages and media deleted' });
+  });
+
+  // ==========================================
+  // AI GENERATION ENDPOINTS (GEMINI 3.6 FLASH)
+  // ==========================================
+
   app.post('/api/ai/generate-card', async (req, res) => {
     try {
-      // 🔒 Check Authentication
       const authHeader = req.headers.authorization || '';
       const token = authHeader.replace('Bearer ', '').trim() || (req.query.token as string);
-      const user = token ? tokensStore.get(token) : null;
+      const user = token ? getUserByToken(token) : null;
 
       if (!user) {
         return res.status(401).json({
@@ -1584,7 +1383,6 @@ async function startServer() {
       const ai = getAIClient();
 
       if (!ai) {
-        // Return intelligent fallback immediately
         const fallback = generateFallbackCard({
           senderName,
           receiverName,
@@ -1611,14 +1409,9 @@ You MUST write ALL user-facing text fields in this exact requested language ("${
 - If "${language}" is Gujarati: Write ALL text in authentic Gujarati script (ગુજરાતી, e.g. "શું તમે મારી સાથે જીવનભર રહેશો?", "તમે મારા માટે સૌથી ખાસ છો").
 - If "${language}" is Hindi: Write ALL text in authentic Hindi Devanagari script (हिंदी, e.g. "क्या तुम मेरी बनोगी?", "तुम मेरी जिंदगी का सबसे खूबसूरत हिस्सा हो").
 - If "${language}" is Marathi: Write ALL text in authentic Marathi script (मराठी, e.g. "माझ्यावर प्रेम करशील का?", "तू माझं संपूर्ण जग आहेस").
-- If "${language}" is Punjabi: Write ALL text in authentic Punjabi (ਪੰਜਾਬੀ, e.g. "ਤੁਸੀਂ ਮੇਰੀ ਜਾਨ ਹੋ").
-- If "${language}" is Bengali: Write ALL text in authentic Bengali (বাংলা, e.g. "তুমি আমার জীবনের সবচেয়ে সুন্দর উপহার").
-- If "${language}" is Tamil: Write ALL text in authentic Tamil (தமிழ்) or Romanized Tanglish if specified.
-- If "${language}" is Telugu: Write ALL text in authentic Telugu (తెలుగు) or Romanized Telugish if specified.
-- If "${language}" is Urdu: Write ALL text in authentic Urdu (اردو) or Romanized Urdu.
+- If "${language}" is Punjabi: Write ALL text in authentic Punjabi (ਪੰਜਾਬੀ).
 - If "${language}" is Spanish (Español): Write ALL text in fluent romantic Spanish (e.g. "¿Quieres ser mi novia/esposa?", "Eres lo más hermoso de mi vida").
-- If "${language}" is French (Français): Write ALL text in romantic French (e.g. "Veux-tu être à moi pour toujours?", "Tu es tout pour moi").
-- If "${language}" is German, Italian, Portuguese, Russian, Japanese, Korean, Arabic, Turkish: Write 100% in that native language.
+- If "${language}" is French (Français): Write ALL text in romantic French.
 - If "${language}" is English: Write in expressive romantic English.
 
 DO NOT OUTPUT ANY ENGLISH TITLES, BADGES, QUESTIONS, OR REASONS IF THE SELECTED LANGUAGE IS NOT ENGLISH.
@@ -1630,24 +1423,20 @@ Inputs:
 - Recipient Name: "${receiverName}"
 - Detected Occasion / Category: "${normalizedCat}" (Raw: "${category}")
 - Relationship: "${relationship}"
-- Desired Tone: "${tone}" (e.g. deeply romantic, playful & sweet, emotional & poetic, humorous, heartfelt)
+- Desired Tone: "${tone}"
 - Language / Dialect: "${language}"
-- Special Memories / Inside jokes / Personal details: "${memories}"
+- Special Memories: "${memories}"
 
 CRITICAL OCCASION ACCURACY RULES (DO NOT VIOLATE):
 1. If Category is "proposal" or user asks to propose / confess love / marry / be mine:
    - The theme MUST be a high-stakes, breathless, romantic love confession or marriage/dating proposal ("Will you be my girlfriend / boyfriend / partner / wife?", "Will you marry me?", "Will you be mine forever?").
    - Question section MUST ask them to say YES to being together / marrying / dating.
    - Scratch card reveals a promise ring or love pledge (revealedEmoji: "💍").
-   - You are STRICTLY FORBIDDEN from writing "Happy Anniversary", "Another year together", or milestone marriage text when a Proposal is requested. A proposal is asking to start or formalize a relationship, NOT celebrating a past anniversary!
-2. If Category is "anniversary":
-   - Focus specifically on celebrating past years/months together and anniversary milestones.
-3. If Category is "birthday":
-   - Focus specifically on birthday celebration, cakes, wishes, and joy.
-4. If Category is "apology":
-   - Focus specifically on a heartfelt apology, asking for forgiveness, and making up.
-5. If Category is "romantic":
-   - Focus on Valentine's romance, admiration, and pure romantic devotion.
+   - You are STRICTLY FORBIDDEN from writing "Happy Anniversary" or milestone marriage text when a Proposal is requested.
+2. If Category is "anniversary": Focus on years/months together and anniversary milestones.
+3. If Category is "birthday": Focus on birthday celebration, cakes, wishes, and joy.
+4. If Category is "apology": Focus on heartfelt apology, asking for forgiveness, and making up.
+5. If Category is "romantic": Focus on pure romantic devotion and love.
 
 Output must be a valid JSON object strictly adhering to this structure:
 {
@@ -1725,7 +1514,7 @@ Return ONLY pure valid JSON without markdown wrapping or code blocks.`;
         });
         rawText = (response.text || '').trim();
       } catch (firstErr) {
-        console.warn('gemini-3.6-flash call failed or quota reached, retrying with gemini-3.1-flash-lite:', firstErr);
+        console.warn('gemini-3.6-flash call failed, retrying with gemini-3.1-flash-lite:', firstErr);
         try {
           const fallbackResp = await ai.models.generateContent({
             model: 'gemini-3.1-flash-lite',
@@ -1733,7 +1522,6 @@ Return ONLY pure valid JSON without markdown wrapping or code blocks.`;
           });
           rawText = (fallbackResp.text || '').trim();
         } catch (secondErr) {
-          console.warn('Gemini secondary model also unavailable, utilizing instant localized fallback generator:', secondErr);
           throw secondErr;
         }
       }
@@ -1756,7 +1544,6 @@ Return ONLY pure valid JSON without markdown wrapping or code blocks.`;
           },
         });
       } catch (parseErr) {
-        console.warn('JSON parse failed from AI response, using fallback', parseErr);
         const fallback = generateFallbackCard({
           senderName,
           receiverName,
@@ -1783,13 +1570,12 @@ Return ONLY pure valid JSON without markdown wrapping or code blocks.`;
     }
   });
 
-  // API 6: AI Emotional Letter & Message Writer (powered by Gemini 3.6 Flash)
+  // AI Letter Writer
   app.post('/api/ai/write', async (req, res) => {
     try {
-      // 🔒 Check Authentication
       const authHeader = req.headers.authorization || '';
       const token = authHeader.replace('Bearer ', '').trim() || (req.query.token as string);
-      const user = token ? tokensStore.get(token) : null;
+      const user = token ? getUserByToken(token) : null;
 
       if (!user) {
         return res.status(401).json({
@@ -1827,7 +1613,7 @@ Return ONLY pure valid JSON without markdown wrapping or code blocks.`;
         occasionDirective = `CRITICAL DIRECTIVE - OCCASION IS A PROPOSAL / LOVE CONFESSION (💍):
 - You MUST write an emotional, breathtaking, romantic LOVE CONFESSION & MARRIAGE/RELATIONSHIP PROPOSAL.
 - Express pure romantic devotion and ask the big question ("Will you be my life partner / girlfriend / boyfriend / marry me?").
-- STRICTLY FORBIDDEN: Do NOT write "Happy Anniversary", do NOT congratulate them on years together, and do NOT treat this as an anniversary. This is a PROPOSAL asking them to start or formalize forever together!`;
+- STRICTLY FORBIDDEN: Do NOT write "Happy Anniversary", do NOT congratulate them on years together.`;
       } else if (normalizedCat === 'anniversary') {
         occasionDirective = `CRITICAL DIRECTIVE - OCCASION IS AN ANNIVERSARY (🥂):
 - Celebrate the milestone of love, memories cherished together, and future years ahead.`;
@@ -1839,27 +1625,12 @@ Return ONLY pure valid JSON without markdown wrapping or code blocks.`;
 - Express sincere remorse, take accountability, and ask for gentle forgiveness and a fresh hug.`;
       }
 
-      const prompt = `You are an empathetic, heartfelt, and poetic writer for HeartPage (a personalized 1-page love and greeting card platform).
+      const prompt = `You are an empathetic, heartfelt, and poetic writer for HeartPage.
 Generate a touching ${outputType} from "${senderName}" to "${receiverName}".
 
 ================================================================================
-CRITICAL STRICT LANGUAGE INSTRUCTION (HIGHEST PRIORITY):
-The user explicitly selected language: "${language}".
-You MUST write ALL output text in this exact requested language ("${language}").
-- If "${language}" is Hinglish (Hindi in English/Latin script): Write in natural conversational Hinglish (e.g. "Meri jaan, kya tum meri banogi?", "Tumhara muskurana meri sabse pyari aadat hai").
-- If "${language}" is Gujlish (Gujarati in English/Latin script): Write in conversational Gujlish (e.g. "Tame mara mate badhu cho", "Kya tame mari sathe aakhi jindagi bitavsho?").
-- If "${language}" is Gujarati: Write in authentic Gujarati script (ગુજરાતી, e.g. "શું તમે મારી સાથે જીવનભર રહેશો?", "તમે મારા માટે સૌથી ખાસ છો").
-- If "${language}" is Hindi: Write in authentic Hindi Devanagari script (हिंदी, e.g. "क्या तुम मेरी बनोगी?", "तुम मेरी जिंदगी का सबसे खूबसूरत हिस्सा हो").
-- If "${language}" is Marathi: Write in authentic Marathi script (मराठी, e.g. "माझ्यावर प्रेम करशील का?", "तू माझं संपूर्ण जग आहेस").
-- If "${language}" is Punjabi: Write in authentic Punjabi (ਪੰਜਾਬੀ).
-- If "${language}" is Bengali: Write in authentic Bengali (বাংলা).
-- If "${language}" is Tamil, Telugu, Urdu, etc.: Write in authentic native script or romanized if specified.
-- If "${language}" is Spanish (Español): Write in fluent romantic Spanish.
-- If "${language}" is French (Français): Write in romantic French.
-- If "${language}" is German, Italian, Russian, Arabic, Japanese, Korean: Write in that native language.
-- If "${language}" is English: Write in expressive romantic English.
-
-DO NOT OUTPUT ANY ENGLISH IF THE SELECTED LANGUAGE IS NOT ENGLISH.
+CRITICAL STRICT LANGUAGE INSTRUCTION:
+Write 100% in requested language: "${language}".
 ================================================================================
 
 ${occasionDirective}
@@ -1867,15 +1638,14 @@ ${occasionDirective}
 Inputs:
 - Sender: "${senderName}"
 - Recipient: "${receiverName}"
-- Language / Dialect: "${language}"
-- Personal details / memories provided: "${customNotes}"
+- Language: "${language}"
+- Personal details / memories: "${customNotes}"
 
 Instructions:
-1. Strictly follow the occasion directive above. If it is a proposal, write a true proposal!
-2. Write in a sincere, emotionally resonant voice matching the requested tone and language.
-3. Do not include markdown code blocks or meta commentary. Return ONLY the letter/poem text.
-4. Format into clean paragraphs separated by double linebreaks.
-5. End with a sweet sign-off line from ${senderName} (with appropriate emoji like 💍🌹 for proposal, 🌹 for romance, 🎂 for birthday).`;
+1. Sincere, emotionally resonant voice.
+2. No markdown code blocks or meta commentary. Return ONLY the text.
+3. Clean paragraphs separated by double linebreaks.
+4. End with a sweet sign-off line from ${senderName}.`;
 
       let text = '';
       try {
@@ -1885,7 +1655,6 @@ Instructions:
         });
         text = response.text || '';
       } catch (firstErr) {
-        console.warn('gemini-3.6-flash write failed or quota reached, retrying with gemini-3.1-flash-lite:', firstErr);
         try {
           const fallbackResp = await ai.models.generateContent({
             model: 'gemini-3.1-flash-lite',
@@ -1893,7 +1662,6 @@ Instructions:
           });
           text = fallbackResp.text || '';
         } catch (secondErr) {
-          console.warn('Gemini secondary write model also unavailable, using localized template fallback:', secondErr);
           throw secondErr;
         }
       }
@@ -1930,6 +1698,18 @@ Instructions:
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    
+    // Initial 30-day card retention & 12-hour chat purge cleanup
+    runRetentionPolicyWorker().catch((err) => {
+      console.error('[Retention Worker] Initial startup cleanup error:', err);
+    });
+
+    // Schedule background worker every 15 minutes (30-day cards purge + 12-hour chat purge + Cloudinary media cleanup)
+    setInterval(() => {
+      runRetentionPolicyWorker().catch((err) => {
+        console.error('[Retention Worker] Recurring 15-min cleanup error:', err);
+      });
+    }, 15 * 60 * 1000);
   });
 }
 

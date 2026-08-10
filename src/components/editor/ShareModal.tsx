@@ -357,12 +357,18 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             </motion.div>
           )}
 
-          {/* 30-Day Cloud Persistence & Privacy Highlight */}
-          <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-stone-300 text-xs flex items-center gap-2">
-            <Clock size={16} className="text-rose-400 shrink-0" />
-            <span>
-              <strong>30-Day Guaranteed Cloud Persistence:</strong> Your complete card, uploaded photos, voice notes, music, and secret messages stay live and accessible for 30 days without disappearing.
-            </span>
+          {/* 30-Day Auto Retention & Auto-Deletion Notice */}
+          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-stone-300 text-xs flex items-start gap-2.5">
+            <Clock size={16} className="text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-0.5">
+              <p className="font-bold text-amber-300 flex items-center gap-1.5">
+                <span>30-Day Auto Retention (30 Din Ke Baad Auto Delete)</span>
+                <span className="text-[10px] px-1.5 py-0.2 bg-amber-500/20 text-amber-200 rounded font-normal">Active for 30 Days</span>
+              </p>
+              <p className="text-[11px] text-stone-300 leading-relaxed">
+                Yeh greeting card, photos, music, voice notes aur secret chat messages <strong>30 days</strong> tak live rahenge. 30 days poore hone par card aur saara media automatically permanently delete ho jayega.
+              </p>
+            </div>
           </div>
         </div>
 

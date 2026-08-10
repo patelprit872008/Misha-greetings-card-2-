@@ -148,39 +148,62 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
     }
   }, [initialKey, expectedKey]);
 
-  // Ephemeral cleanup: auto-wipe chat on exit / unmount / navigation / beforeunload
-  const wipeRoomDataInstantly = () => {
-    try {
-      localStorage.removeItem(`misha_chat_${cardData.id}`);
-      setMessages([]);
-      const cleanKey = enteredKey.trim().toUpperCase() || 'MISHA143';
+  // Record participant join when entering secret chat
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetch(`/api/chat/${cardData.id}/join`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ deviceId: myDeviceId }),
+      }).catch(() => {});
+    }
+  }, [isAuthenticated, cardData.id, myDeviceId]);
 
+  // Record exit when leaving the chat room (starts 12-hour auto-purge timer)
+  const notifyChatExit = () => {
+    try {
+      const payload = JSON.stringify({ deviceId: myDeviceId });
       if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
-        const blob = new Blob([JSON.stringify({ chatKey: cleanKey })], {
-          type: 'application/json',
-        });
-        navigator.sendBeacon(`/api/chat/${cardData.id}/clear`, blob);
+        const blob = new Blob([payload], { type: 'application/json' });
+        navigator.sendBeacon(`/api/chat/${cardData.id}/exit`, blob);
       } else {
-        fetch(`/api/chat/${cardData.id}/clear`, {
+        fetch(`/api/chat/${cardData.id}/exit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chatKey: cleanKey }),
+          body: payload,
           keepalive: true,
         }).catch(() => {});
       }
     } catch (e) {}
   };
 
-  // Handle Exit & Wipe Chat (Ephemeral: deletes all messages so nothing is stored on exit)
-  const handleExitAndWipeChat = async () => {
-    wipeRoomDataInstantly();
+  // Instant Manual Wipe (Clears all messages and media immediately)
+  const handleInstantWipeChat = async () => {
+    if (!window.confirm('Kya aap sach me saari chat aur media abhi turant delete karna chahte hain?')) {
+      return;
+    }
+    try {
+      localStorage.removeItem(`misha_chat_${cardData.id}`);
+      setMessages([]);
+      const cleanKey = enteredKey.trim().toUpperCase() || 'MISHA143';
+      await fetch(`/api/chat/${cardData.id}/clear`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chatKey: cleanKey }),
+      });
+    } catch (e) {}
+  };
+
+  // Handle Exit Chat (Records exit on server and navigates back to card)
+  const handleExitChat = () => {
+    notifyChatExit();
     onBackToCard();
   };
 
-  // Ephemeral cleanup on unmount and window close / pagehide
+  // Register exit listener on unmount and window close / pagehide
   useEffect(() => {
     const handleBeforeUnload = () => {
-      wipeRoomDataInstantly();
+      notifyChatExit();
     };
 
     window.addEventListener('beforeunload', handleBeforeUnload);
@@ -189,9 +212,9 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
       window.removeEventListener('pagehide', handleBeforeUnload);
-      wipeRoomDataInstantly();
+      notifyChatExit();
     };
-  }, [cardData.id, enteredKey]);
+  }, [cardData.id, myDeviceId]);
 
   // Scroll to bottom when messages update
   const scrollToBottom = () => {
@@ -423,7 +446,7 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
         {/* Top Back Button */}
         <button
           type="button"
-          onClick={handleExitAndWipeChat}
+          onClick={handleExitChat}
           className="absolute top-5 left-5 px-4 py-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-semibold flex items-center gap-2 backdrop-blur-md transition-all shadow-md hover:scale-105 cursor-pointer text-white"
         >
           <ArrowLeft size={14} />
@@ -571,9 +594,9 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
         <div className="flex items-center gap-2 sm:gap-3">
           <button
             type="button"
-            onClick={handleExitAndWipeChat}
+            onClick={handleExitChat}
             className="p-2 -ml-1 rounded-full text-stone-300 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
-            title="Exit & Wipe Secret Chat"
+            title="Exit Room (12-Hour Auto-Purge Countdown Active)"
           >
             <ArrowLeft size={20} />
           </button>
@@ -667,9 +690,9 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
           {/* Wipe & End Chat */}
           <button
             type="button"
-            onClick={handleExitAndWipeChat}
+            onClick={handleInstantWipeChat}
             className="p-2 rounded-full text-rose-300 hover:text-rose-200 hover:bg-rose-500/20 transition-colors cursor-pointer"
-            title="Wipe Chat & Exit (No storage)"
+            title="Instant Wipe All Messages & Cloud Media Now"
           >
             <Trash2 size={18} />
           </button>
@@ -702,7 +725,7 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
           }}
         />
 
-        {/* Security & Instant Wipe on Exit Banner */}
+        {/* Security & 12-Hour Auto-Purge Banner */}
         <div className="w-full max-w-md mx-auto my-2 text-center relative z-10">
           <div
             className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-[11px] font-medium text-emerald-300 border backdrop-blur-md shadow-sm"
@@ -712,7 +735,7 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
             }}
           >
             <ShieldCheck size={13} className="text-emerald-400 shrink-0" />
-            <span>⚡ <strong>WhatsApp Ephemeral Mode:</strong> Chat data is deleted immediately upon exiting!</span>
+            <span>🔒 <strong>12-Hour Auto-Purge:</strong> Chat se bahar jaane ke 12 ghante baad saare messages & media automatically permanently delete ho jayenge!</span>
           </div>
         </div>
 
@@ -1178,7 +1201,11 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-stone-400">Privacy Expiry:</span>
+                  <span className="text-stone-400">Chat Auto-Purge:</span>
+                  <span className="font-semibold text-emerald-300">12 Hours (on exit)</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-stone-400">Card Retention:</span>
                   <span className="font-semibold text-rose-300">30 Days Auto-Wipe</span>
                 </div>
                 <div className="flex justify-between items-center">

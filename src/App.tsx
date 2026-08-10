@@ -9,7 +9,7 @@ import { TEMPLATE_PRESETS } from './data/templates';
 import { encodePageDataToHash, decodePageDataFromHash } from './utils/compression';
 import { CreatorStudio } from './components/editor/CreatorStudio';
 import { ReceiverExperience } from './components/receiver/ReceiverExperience';
-import { Sparkles, Edit3 } from 'lucide-react';
+import { Sparkles, Edit3, Clock, Heart, ArrowLeft, Plus } from 'lucide-react';
 import { unlockAudio } from './utils/audio';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AuthModal } from './components/auth/AuthModal';
@@ -210,6 +210,7 @@ function MainApp() {
   });
 
   const [isReceiverMode, setIsReceiverMode] = useState<boolean>(() => initialUrlState.isReceiver);
+  const [isCardExpired, setIsCardExpired] = useState<boolean>(false);
   const [isLoadingShared, setIsLoadingShared] = useState<boolean>(() => {
     // If hash was decoded synchronously, no loading spinner needed!
     if (initialUrlState.hasHash && initialUrlState.hash) {
@@ -312,57 +313,67 @@ function MainApp() {
               `/api/pages/${urlState.pageId}`,
             ];
 
+            let foundCard = false;
             for (const endpoint of fetchEndpoints) {
               try {
                 const res = await fetch(endpoint);
                 const contentType = res.headers.get('content-type') || '';
-                if (res.ok && contentType.includes('application/json')) {
+                if (contentType.includes('application/json')) {
                   const serverResponse = await res.json();
-                  const normalized = extractAndNormalizeGreeting(serverResponse);
-                  if (normalized && (normalized.hero || normalized.id)) {
-                    setPageData(normalized);
-                    try {
-                      localStorage.setItem(`heartpage_card_${urlState.pageId}`, JSON.stringify(normalized));
-                      if (normalized.id) {
-                        localStorage.setItem(`heartpage_card_${normalized.id}`, JSON.stringify(normalized));
-                      }
-                    } catch (e) {}
+                  if (res.status === 404 || serverResponse?.expired) {
+                    setIsCardExpired(true);
                     setIsLoadingShared(false);
                     return;
+                  }
+                  if (res.ok) {
+                    const normalized = extractAndNormalizeGreeting(serverResponse);
+                    if (normalized && (normalized.hero || normalized.id)) {
+                      setPageData(normalized);
+                      try {
+                        localStorage.setItem(`heartpage_card_${urlState.pageId}`, JSON.stringify(normalized));
+                        if (normalized.id) {
+                          localStorage.setItem(`heartpage_card_${normalized.id}`, JSON.stringify(normalized));
+                        }
+                      } catch (e) {}
+                      setIsLoadingShared(false);
+                      foundCard = true;
+                      return;
+                    }
                   }
                 }
               } catch (e) {
                 // Try next endpoint
               }
             }
+
+            if (!foundCard) {
+              // Check if offline cache exists
+              try {
+                const cached =
+                  localStorage.getItem(`heartpage_card_${urlState.pageId}`) ||
+                  localStorage.getItem(`heartpage_draft_${urlState.pageId}`);
+                if (cached) {
+                  const parsed = JSON.parse(cached);
+                  const normalized = extractAndNormalizeGreeting(parsed);
+                  if (normalized && (normalized.hero || normalized.id)) {
+                    setPageData(normalized);
+                    setIsLoadingShared(false);
+                    return;
+                  }
+                }
+              } catch (e) {}
+
+              // Card not found or expired after 30 days
+              setIsCardExpired(true);
+              setIsLoadingShared(false);
+              return;
+            }
           } catch (e) {
             console.warn('Could not fetch from server:', e);
+            setIsCardExpired(true);
+            setIsLoadingShared(false);
+            return;
           }
-
-          // C. Offline Cache fallback (if device previously visited this card)
-          try {
-            const cached =
-              localStorage.getItem(`heartpage_card_${urlState.pageId}`) ||
-              localStorage.getItem(`heartpage_draft_${urlState.pageId}`);
-            if (cached) {
-              const parsed = JSON.parse(cached);
-              const normalized = extractAndNormalizeGreeting(parsed);
-              if (normalized && (normalized.hero || normalized.id)) {
-                setPageData(normalized);
-                setIsLoadingShared(false);
-                return;
-              }
-            }
-          } catch (e) {}
-
-          // D. Fallback if card was not found or has expired:
-          const fallbackCard = getCleanDefaultTemplate();
-          fallbackCard.id = urlState.pageId;
-          fallbackCard.hero.mainTitle = 'A Special Surprise For You ❤️';
-          fallbackCard.hero.subtitle = 'Created with infinite love and care.';
-          setPageData(fallbackCard);
-          setIsLoadingShared(false);
-          return;
         }
 
         setIsLoadingShared(false);
@@ -552,6 +563,58 @@ function MainApp() {
             <p className="text-xs font-semibold uppercase tracking-widest text-rose-300">
               Unwrapping your card... ✨
             </p>
+          </div>
+        </div>
+      );
+    }
+
+    if (isCardExpired) {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-[#0f0c15] via-[#161220] to-[#0c0a12] text-stone-200 flex items-center justify-center p-4 relative overflow-hidden">
+          {/* Subtle Ambient Background */}
+          <div className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-rose-500/10 rounded-full blur-3xl pointer-events-none" />
+          
+          <div className="relative max-w-md w-full bg-stone-900/90 border border-white/10 rounded-3xl p-7 sm:p-8 shadow-2xl backdrop-blur-xl text-center space-y-5">
+            {/* Expired Badge / Icon */}
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-gradient-to-br from-amber-500/20 to-rose-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-lg">
+              <Clock size={32} />
+            </div>
+
+            <div className="space-y-2">
+              <span className="text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                ⏳ 30-Day Retention Expired
+              </span>
+              <h2 className="text-xl sm:text-2xl font-bold text-white font-serif-display mt-2">
+                Yeh Card Expire Ho Chuka Hai
+              </h2>
+              <p className="text-xs sm:text-sm text-stone-400 leading-relaxed max-w-sm mx-auto">
+                Misha Greetings privacy aur storage retention policy ke mutabiq yeh greeting card <strong>30 dino</strong> ke liye active tha aur ab automatically remove ho chuka hai.
+              </p>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="pt-3 space-y-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href = window.location.origin;
+                }}
+                className="w-full py-3.5 px-4 rounded-xl font-bold text-sm text-white bg-gradient-to-r from-rose-600 via-pink-600 to-rose-500 hover:from-rose-500 hover:to-pink-500 shadow-lg shadow-rose-950/60 flex items-center justify-center gap-2 transition-all active:scale-[0.98] cursor-pointer"
+              >
+                <Plus size={18} />
+                <span>Create New Greeting Card ❤️</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href = window.location.origin;
+                }}
+                className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold text-stone-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <span>Back to Home</span>
+              </button>
+            </div>
           </div>
         </div>
       );

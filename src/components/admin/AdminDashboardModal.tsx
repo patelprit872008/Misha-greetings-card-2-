@@ -173,6 +173,30 @@ export const AdminDashboardModal: React.FC = () => {
     }
   };
 
+  const handlePurgeExpired = async () => {
+    if (!window.confirm('Purge all cards older than 30 days and delete their cloud media assets?')) {
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const res = await fetch('/api/admin/cleanup-expired', {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setActionFeedback(data.message || `Purged ${data.purgedCount || 0} expired cards.`);
+        await fetchAdminData();
+      } else {
+        setActionFeedback(data.error || 'Purge failed.');
+      }
+    } catch (err) {
+      setActionFeedback('Error triggering expired cards cleanup.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const filteredCards = cards.filter(
     (c) =>
       c.id.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -221,6 +245,16 @@ export const AdminDashboardModal: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handlePurgeExpired}
+              disabled={isLoading}
+              className="px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Purge cards older than 30 days and cleanup media"
+            >
+              <Clock size={13} />
+              <span className="hidden sm:inline">Purge Expired (30d)</span>
+            </button>
             <button
               type="button"
               onClick={fetchAdminData}

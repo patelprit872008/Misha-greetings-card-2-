@@ -220,6 +220,8 @@ export interface HeartPageData {
   createdAt: string;
   updatedAt: string;
   expiresAt?: string;
+  retentionDays?: number;
+  daysRemaining?: number;
 }
 
 export interface PublishedGreeting {
@@ -233,6 +235,8 @@ export interface PublishedGreeting {
   created_at: string;
   updated_at: string;
   expires_at?: string;
+  retentionDays?: number;
+  daysRemaining?: number;
   view_count: number;
   chatKey?: string;
   creatorName?: string;
