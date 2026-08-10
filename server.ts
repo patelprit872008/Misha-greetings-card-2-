@@ -684,27 +684,15 @@ async function startServer() {
     });
   });
 
-  // Auth 2.1: Google OAuth Authorization URL
+  // Auth 2.1: Google OAuth Config Info
   app.get('/api/auth/google/url', (req, res) => {
-    const redirectUri =
-      (req.query.redirect_uri as string) ||
-      process.env.GOOGLE_REDIRECT_URI ||
-      'https://mishagreetingscard.netlify.app/';
     const rawClientId =
       process.env.GOOGLE_CLIENT_ID ||
       process.env.CLIENT_ID ||
       process.env.VITE_GOOGLE_CLIENT_ID ||
-      '519158285260-47pnfivd7bldlrkk00bglptgiiivbr8d.apps.googleusercontent.com';
+      '';
     const clientId = rawClientId.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '').trim();
-    const scope = encodeURIComponent('openid email profile');
-    const state = Buffer.from(JSON.stringify({ redirectUri })).toString('base64');
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(
-      clientId
-    )}&redirect_uri=${encodeURIComponent(
-      redirectUri
-    )}&response_type=token%20id_token&scope=${scope}&state=${encodeURIComponent(state)}&nonce=${Date.now()}`;
-
-    return res.json({ url: authUrl, redirectUri, clientId });
+    return res.json({ clientId });
   });
 
   // Auth 2.2: OAuth Callback HTML for Popup & Redirects
