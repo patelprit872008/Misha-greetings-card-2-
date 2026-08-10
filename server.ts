@@ -690,11 +690,12 @@ async function startServer() {
       (req.query.redirect_uri as string) ||
       process.env.GOOGLE_REDIRECT_URI ||
       'https://mishagreetingscard.netlify.app/';
-    const clientId =
+    const rawClientId =
       process.env.GOOGLE_CLIENT_ID ||
       process.env.CLIENT_ID ||
       process.env.VITE_GOOGLE_CLIENT_ID ||
-      '1046187762691-misha-greetings.apps.googleusercontent.com';
+      '519158285260-47pnfivd7bldlrkk00bglptgiiivbr8d.apps.googleusercontent.com';
+    const clientId = rawClientId.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '').trim();
     const scope = encodeURIComponent('openid email profile');
     const state = Buffer.from(JSON.stringify({ redirectUri })).toString('base64');
     const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(

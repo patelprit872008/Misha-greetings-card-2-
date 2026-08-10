@@ -27,19 +27,29 @@ interface SavedGoogleAccount {
 
 const SAVED_GOOGLE_KEY = 'misha_saved_google_ids';
 const CUSTOM_CLIENT_ID_KEY = 'misha_custom_google_client_id';
-const DEFAULT_PLACEHOLDER_CLIENT_ID = '1046187762691-misha-greetings.apps.googleusercontent.com';
+const DEFAULT_GOOGLE_CLIENT_ID = '519158285260-47pnfivd7bldlrkk00bglptgiiivbr8d.apps.googleusercontent.com';
 const NETLIFY_PROD_URL = 'https://mishagreetingscard.netlify.app/';
+
+const cleanGoogleClientId = (raw: string | undefined | null): string => {
+  if (!raw) return '';
+  return raw
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\/+$/, '')
+    .trim();
+};
 
 const getActiveGoogleClientId = (): string => {
   try {
     const custom = localStorage.getItem(CUSTOM_CLIENT_ID_KEY);
-    if (custom && custom.trim().length > 10) return custom.trim();
+    if (custom && custom.trim().length > 10) return cleanGoogleClientId(custom);
   } catch (e) {}
-  return (
-    (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID ||
-    (window as any).__GOOGLE_CLIENT_ID__ ||
-    DEFAULT_PLACEHOLDER_CLIENT_ID
-  );
+  
+  const envId = (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID || (window as any).__GOOGLE_CLIENT_ID__;
+  if (envId && envId.trim().length > 10) {
+    return cleanGoogleClientId(envId);
+  }
+  return DEFAULT_GOOGLE_CLIENT_ID;
 };
 
 export const AuthScreen: React.FC = () => {
