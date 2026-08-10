@@ -88,6 +88,23 @@ function resolveCardId(idOrShortId: string): string {
   if (shortIdIndex.has(clean)) {
     return shortIdIndex.get(clean)!;
   }
+  if (greetingsStore.has(clean)) {
+    return clean;
+  }
+  if (pagesStore.has(clean)) {
+    return clean;
+  }
+  // Check case-insensitive or iterate through greetings
+  for (const [cid, greeting] of greetingsStore.entries()) {
+    if (greeting.short_id === clean || greeting.id === clean || cid.toLowerCase() === clean.toLowerCase()) {
+      return cid;
+    }
+  }
+  for (const [pid, page] of pagesStore.entries()) {
+    if (page.short_id === clean || page.shortId === clean || page.id === clean || pid.toLowerCase() === clean.toLowerCase()) {
+      return pid;
+    }
+  }
   return clean;
 }
 

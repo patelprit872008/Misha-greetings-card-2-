@@ -105,6 +105,90 @@ export function getInitialUrlReceiverState(): UrlReceiverState {
   };
 }
 
+// Helper to robustly extract and normalize HeartPageData from any server response
+function extractAndNormalizeGreeting(serverResponse: any): HeartPageData | null {
+  if (!serverResponse) return null;
+
+  let rawData: any = null;
+  if (serverResponse.project_json && typeof serverResponse.project_json === 'object') {
+    rawData = serverResponse.project_json;
+  } else if (serverResponse.greeting?.project_json && typeof serverResponse.greeting.project_json === 'object') {
+    rawData = serverResponse.greeting.project_json;
+  } else if (serverResponse.hero && typeof serverResponse.hero === 'object') {
+    rawData = serverResponse;
+  }
+
+  if (!rawData || typeof rawData !== 'object') return null;
+
+  const defaultTmpl = getCleanDefaultTemplate();
+  const normalized: HeartPageData = {
+    ...defaultTmpl,
+    ...rawData,
+    id: rawData.id || serverResponse.id || defaultTmpl.id,
+    short_id: rawData.short_id || rawData.shortId || serverResponse.short_id || serverResponse.shortId,
+    shortId: rawData.short_id || rawData.shortId || serverResponse.short_id || serverResponse.shortId,
+    chatKey: (rawData.chatKey || serverResponse.chatKey || 'LOVE-1430').trim().toUpperCase(),
+    theme: rawData.theme || defaultTmpl.theme,
+    particleEffect: rawData.particleEffect || defaultTmpl.particleEffect,
+    musicTrack: rawData.musicTrack || defaultTmpl.musicTrack,
+    customMusicUrl: rawData.customMusicUrl,
+    customMusicName: rawData.customMusicName,
+    hero: {
+      ...defaultTmpl.hero,
+      ...(rawData.hero || {}),
+    },
+    envelope: {
+      ...defaultTmpl.envelope,
+      ...(rawData.envelope || {}),
+    },
+    counter: {
+      ...defaultTmpl.counter,
+      ...(rawData.counter || {}),
+    },
+    question: {
+      ...defaultTmpl.question,
+      ...(rawData.question || {}),
+    },
+    cake: {
+      ...defaultTmpl.cake,
+      ...(rawData.cake || {}),
+    },
+    photos: {
+      ...defaultTmpl.photos,
+      ...(rawData.photos || {}),
+      photos: Array.isArray(rawData.photos?.photos)
+        ? rawData.photos.photos
+        : (Array.isArray(rawData.photos) ? rawData.photos : []),
+    },
+    scratchCard: {
+      ...defaultTmpl.scratchCard,
+      ...(rawData.scratchCard || {}),
+    },
+    reasons: {
+      ...defaultTmpl.reasons,
+      ...(rawData.reasons || {}),
+      reasons: Array.isArray(rawData.reasons?.reasons)
+        ? rawData.reasons.reasons
+        : (Array.isArray(rawData.reasons) ? rawData.reasons : []),
+    },
+    letter: {
+      ...defaultTmpl.letter,
+      ...(rawData.letter || {}),
+      paragraphs: Array.isArray(rawData.letter?.paragraphs)
+        ? rawData.letter.paragraphs
+        : (typeof rawData.letter?.body === 'string'
+            ? rawData.letter.body.split('\n\n')
+            : defaultTmpl.letter.paragraphs),
+    },
+    receiverResponse: {
+      ...defaultTmpl.receiverResponse,
+      ...(rawData.receiverResponse || {}),
+    },
+  };
+
+  return normalized;
+}
+
 function MainApp() {
   const { user, isAuthenticated, token, openAuthModal, isLoading: isAuthContextLoading } = useAuth();
 
@@ -121,19 +205,6 @@ function MainApp() {
         }
         return decoded;
       }
-    }
-    if (initialUrlState.pageId) {
-      try {
-        const cached =
-          localStorage.getItem(`heartpage_card_${initialUrlState.pageId}`) ||
-          localStorage.getItem(`heartpage_draft_${initialUrlState.pageId}`);
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (parsed && (parsed.hero || parsed.id)) {
-            return parsed;
-          }
-        }
-      } catch (e) {}
     }
     return getCleanDefaultTemplate(user?.name);
   });
@@ -212,8 +283,6 @@ function MainApp() {
           setInitialChatKey(urlState.chatKey);
         }
 
-        let loadedData: HeartPageData | null = null;
-
         // A. Decode from Hash first (instant, 100% resilient across any hosting / device / offline)
         if (urlState.hash && urlState.hash.length > 5) {
           const decoded = decodePageDataFromHash(urlState.hash);
@@ -221,7 +290,6 @@ function MainApp() {
             if (!decoded.chatKey) {
               decoded.chatKey = `LOVE-${Math.floor(1000 + Math.random() * 9000)}`;
             }
-            loadedData = decoded;
             setPageData(decoded);
             try {
               if (decoded.id) {
@@ -233,54 +301,30 @@ function MainApp() {
           }
         }
 
-        // B. Local Storage cache (for creator previews or same browser visits)
+        // B. Fetch from live Server API (/api/g/:shortId or /api/pages/:id)
         if (urlState.pageId) {
-          try {
-            const cached =
-              localStorage.getItem(`heartpage_card_${urlState.pageId}`) ||
-              localStorage.getItem(`heartpage_draft_${urlState.pageId}`);
-            if (cached) {
-              const parsed = JSON.parse(cached);
-              if (parsed && (parsed.hero || parsed.id)) {
-                if (!parsed.chatKey) {
-                  parsed.chatKey = `LOVE-${Math.floor(1000 + Math.random() * 9000)}`;
-                }
-                loadedData = parsed;
-                setPageData(parsed);
-                setIsLoadingShared(false);
-              }
-            }
-          } catch (e) {}
+          setIsLoadingShared(true);
 
-          // C. Fetch from live Server API (/api/g/:shortId or /api/pages/:id)
           try {
             const fetchEndpoints = [
               `/api/g/${urlState.pageId}`,
+              `/api/greetings/${urlState.pageId}`,
               `/api/pages/${urlState.pageId}`,
             ];
 
             for (const endpoint of fetchEndpoints) {
-              if (loadedData) break;
               try {
                 const res = await fetch(endpoint);
                 const contentType = res.headers.get('content-type') || '';
                 if (res.ok && contentType.includes('application/json')) {
                   const serverResponse = await res.json();
-                  // Extract greeting from response
-                  const serverData = serverResponse.greeting || serverResponse.project_json || serverResponse;
-                  if (serverData && (serverData.hero || serverData.id)) {
-                    if (!serverData.chatKey) {
-                      serverData.chatKey = `LOVE-${Math.floor(1000 + Math.random() * 9000)}`;
-                    }
-                    if (serverResponse.short_id || serverResponse.shortId) {
-                      serverData.short_id = serverResponse.short_id || serverResponse.shortId;
-                    }
-                    loadedData = serverData;
-                    setPageData(serverData);
+                  const normalized = extractAndNormalizeGreeting(serverResponse);
+                  if (normalized && (normalized.hero || normalized.id)) {
+                    setPageData(normalized);
                     try {
-                      localStorage.setItem(`heartpage_card_${urlState.pageId}`, JSON.stringify(serverData));
-                      if (serverData.id) {
-                        localStorage.setItem(`heartpage_card_${serverData.id}`, JSON.stringify(serverData));
+                      localStorage.setItem(`heartpage_card_${urlState.pageId}`, JSON.stringify(normalized));
+                      if (normalized.id) {
+                        localStorage.setItem(`heartpage_card_${normalized.id}`, JSON.stringify(normalized));
                       }
                     } catch (e) {}
                     setIsLoadingShared(false);
@@ -292,16 +336,26 @@ function MainApp() {
               }
             }
           } catch (e) {
-            console.warn('Could not fetch from server, using fallback card:', e);
+            console.warn('Could not fetch from server:', e);
           }
 
-          if (loadedData) {
-            setIsLoadingShared(false);
-            return;
-          }
+          // C. Offline Cache fallback (if device previously visited this card)
+          try {
+            const cached =
+              localStorage.getItem(`heartpage_card_${urlState.pageId}`) ||
+              localStorage.getItem(`heartpage_draft_${urlState.pageId}`);
+            if (cached) {
+              const parsed = JSON.parse(cached);
+              const normalized = extractAndNormalizeGreeting(parsed);
+              if (normalized && (normalized.hero || normalized.id)) {
+                setPageData(normalized);
+                setIsLoadingShared(false);
+                return;
+              }
+            }
+          } catch (e) {}
 
-          // D. Fallback if card was shared with bare ID on static host without hash:
-          // Provide a sweet, functioning greeting card rather than showing Auth page!
+          // D. Fallback if card was not found or has expired:
           const fallbackCard = getCleanDefaultTemplate();
           fallbackCard.id = urlState.pageId;
           fallbackCard.hero.mainTitle = 'A Special Surprise For You ❤️';
