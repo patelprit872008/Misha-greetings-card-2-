@@ -132,7 +132,7 @@ function saveBase64ToUploads(dataUrl: string, originalName?: string): string {
 function deepSanitizeMedia(obj: any): any {
   if (!obj) return obj;
   if (typeof obj === 'string') {
-    if (obj.startsWith('data:image/') || obj.startsWith('data:audio/') || obj.startsWith('data:video/')) {
+    if (obj.startsWith('data:') && obj.includes(';base64,')) {
       return saveBase64ToUploads(obj);
     }
     return obj;
@@ -224,10 +224,10 @@ usersStore.set(ADMIN_EMAIL.toLowerCase(), {
 // Restore previous data from disk
 loadStoreFromDisk();
 
-// 15-day TTL auto-deletion constant (15 days in milliseconds)
-const FIFTEEN_DAYS_MS = 15 * 24 * 60 * 60 * 1000;
+// 30-day TTL auto-deletion constant (30 days in milliseconds)
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
-// Periodic automatic cleanup of data older than 15 days
+// Periodic automatic cleanup of data older than 30 days
 function cleanupExpiredData() {
   const now = Date.now();
   let cleanedGreetings = 0;
@@ -264,7 +264,7 @@ function cleanupExpiredData() {
 
   if (cleanedGreetings > 0 || cleanedPages > 0 || cleanedChats > 0) {
     saveStoreToDisk();
-    console.log(`[Auto-Cleanup] Purged ${cleanedGreetings} expired greetings, ${cleanedPages} pages, and ${cleanedChats} chats (15-day TTL).`);
+    console.log(`[Auto-Cleanup] Purged ${cleanedGreetings} expired greetings, ${cleanedPages} pages, and ${cleanedChats} chats (30-day TTL).`);
   }
 }
 
@@ -1085,7 +1085,7 @@ async function startServer() {
         totalSecretChats: chatStore.size,
         totalUsers: usersStore.size,
         serverUptime: process.uptime(),
-        ttlDays: 15,
+        ttlDays: 30,
       },
       cards: allCards,
       users: allUsers,
@@ -1167,7 +1167,7 @@ async function startServer() {
       const createdAt = sanitizedProject.createdAt || now.toISOString();
       const expiresAt =
         sanitizedProject.expiresAt ||
-        new Date(now.getTime() + FIFTEEN_DAYS_MS).toISOString();
+        new Date(now.getTime() + THIRTY_DAYS_MS).toISOString();
       const chatKey = (sanitizedProject.chatKey || generateChatKey()).trim().toUpperCase();
       sanitizedProject.chatKey = chatKey;
 
@@ -1283,7 +1283,7 @@ async function startServer() {
       reactionsStore.delete(cardId);
       chatStore.delete(cardId);
       saveStoreToDisk();
-      return res.status(404).json({ error: 'Greeting has expired (15-day TTL)' });
+      return res.status(404).json({ error: 'Greeting has expired (30-day TTL)' });
     }
 
     // Increment view count
@@ -1446,7 +1446,7 @@ async function startServer() {
         chatKey: correctKey || providedKey,
         messages: [],
         createdAt: now.toISOString(),
-        expiresAt: new Date(now.getTime() + FIFTEEN_DAYS_MS).toISOString(),
+        expiresAt: new Date(now.getTime() + THIRTY_DAYS_MS).toISOString(),
       };
       chatStore.set(cardId, chat);
     }
@@ -1505,17 +1505,18 @@ async function startServer() {
     return res.status(404).json({ error: 'Message not found' });
   });
 
-  // API 4.5: Ephemeral Chat Wipe / Clear on Exit (No persistent storage)
+  // API 4.5: Ephemeral Chat Wipe / Clear on Exit (Instant wipe on leave)
   app.post('/api/chat/:id/clear', (req, res) => {
     const cardId = resolveCardId(req.params.id);
-    const { chatKey = '' } = req.body;
+    const { chatKey = '' } = req.body || {};
 
     const page = pagesStore.get(cardId) || greetingsStore.get(cardId)?.project_json;
     const chat = chatStore.get(cardId);
     const correctKey = (page?.chatKey || chat?.chatKey || '').trim().toUpperCase();
     const cleanKey = (chatKey || '').trim().toUpperCase();
 
-    if (correctKey && cleanKey !== correctKey && cleanKey !== 'MISHA143') {
+    // If key provided, check it; otherwise allow exit wipe
+    if (correctKey && cleanKey && cleanKey !== correctKey && cleanKey !== 'MISHA143') {
       return res.status(401).json({ error: 'Invalid Secret Passkey' });
     }
 
@@ -1525,7 +1526,7 @@ async function startServer() {
     chatStore.delete(cardId);
     saveStoreToDisk();
 
-    return res.json({ success: true, message: 'Chat room messages wiped clean' });
+    return res.json({ success: true, message: 'Chat room messages wiped clean on exit' });
   });
 
   app.delete('/api/chat/:id/messages', (req, res) => {
@@ -1536,7 +1537,7 @@ async function startServer() {
     }
     chatStore.delete(cardId);
     saveStoreToDisk();
-    return res.json({ success: true, message: 'Chat room deleted' });
+    return res.json({ success: true, message: 'Chat room messages deleted' });
   });
 
   // API 5: Complete AI Card Generator (creates entire HeartPage content with Gemini 3.6 Flash)

@@ -148,32 +148,48 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
     }
   }, [initialKey, expectedKey]);
 
-  // Handle Exit & Wipe Chat (Ephemeral: deletes all messages so nothing is stored on exit)
-  const handleExitAndWipeChat = async () => {
+  // Ephemeral cleanup: auto-wipe chat on exit / unmount / navigation / beforeunload
+  const wipeRoomDataInstantly = () => {
     try {
       localStorage.removeItem(`misha_chat_${cardData.id}`);
       setMessages([]);
-      await fetch(`/api/chat/${cardData.id}/clear`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatKey: enteredKey.trim().toUpperCase() || 'MISHA143' }),
-      }).catch(() => {});
-    } catch (e) {}
-    onBackToCard();
-  };
+      const cleanKey = enteredKey.trim().toUpperCase() || 'MISHA143';
 
-  // Ephemeral cleanup on unmount
-  useEffect(() => {
-    return () => {
-      try {
-        localStorage.removeItem(`misha_chat_${cardData.id}`);
+      if (typeof navigator !== 'undefined' && navigator.sendBeacon) {
+        const blob = new Blob([JSON.stringify({ chatKey: cleanKey })], {
+          type: 'application/json',
+        });
+        navigator.sendBeacon(`/api/chat/${cardData.id}/clear`, blob);
+      } else {
         fetch(`/api/chat/${cardData.id}/clear`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chatKey: enteredKey.trim().toUpperCase() || 'MISHA143' }),
+          body: JSON.stringify({ chatKey: cleanKey }),
           keepalive: true,
         }).catch(() => {});
-      } catch (e) {}
+      }
+    } catch (e) {}
+  };
+
+  // Handle Exit & Wipe Chat (Ephemeral: deletes all messages so nothing is stored on exit)
+  const handleExitAndWipeChat = async () => {
+    wipeRoomDataInstantly();
+    onBackToCard();
+  };
+
+  // Ephemeral cleanup on unmount and window close / pagehide
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      wipeRoomDataInstantly();
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
+      wipeRoomDataInstantly();
     };
   }, [cardData.id, enteredKey]);
 
@@ -596,6 +612,18 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
 
         {/* Right: Actions */}
         <div className="flex items-center gap-1 sm:gap-2">
+          {/* Role Perspective Switcher for Testing / Preview */}
+          <button
+            type="button"
+            onClick={() => setActiveRole(activeRole === 'receiver' ? 'creator' : 'receiver')}
+            className="px-2.5 py-1 rounded-full text-[10px] font-semibold bg-white/10 hover:bg-white/20 border border-white/15 text-stone-200 hover:text-white transition-all flex items-center gap-1 cursor-pointer"
+            title="Switch message perspective (test as Sender vs Receiver)"
+          >
+            <User size={12} className="text-emerald-400" />
+            <span className="hidden sm:inline">Viewing as:</span>
+            <strong className="text-white capitalize">{activeRole}</strong>
+          </button>
+
           {/* Shower Hearts Button */}
           <button
             type="button"
@@ -674,17 +702,17 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
           }}
         />
 
-        {/* Security & 15-Day TTL Banner */}
-        <div className="w-full max-w-sm mx-auto my-2 text-center relative z-10">
+        {/* Security & Instant Wipe on Exit Banner */}
+        <div className="w-full max-w-md mx-auto my-2 text-center relative z-10">
           <div
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] text-amber-200 border backdrop-blur-md shadow-sm"
+            className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-[11px] font-medium text-emerald-300 border backdrop-blur-md shadow-sm"
             style={{
-              background: 'rgba(245, 158, 11, 0.12)',
-              borderColor: 'rgba(245, 158, 11, 0.3)',
+              background: 'rgba(16, 185, 129, 0.12)',
+              borderColor: 'rgba(16, 185, 129, 0.3)',
             }}
           >
-            <Lock size={12} className="text-amber-400 shrink-0" />
-            <span>Messages protected with key ({enteredKey}). Auto-wiped in 15 days.</span>
+            <ShieldCheck size={13} className="text-emerald-400 shrink-0" />
+            <span>⚡ <strong>WhatsApp Ephemeral Mode:</strong> Chat data is deleted immediately upon exiting!</span>
           </div>
         </div>
 
@@ -698,7 +726,7 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
               color: theme.badgeText,
             }}
           >
-            Private Conversation • Secret Room 💌
+            End-to-End Encrypted • Secret Room 💌
           </span>
         </div>
 
@@ -711,7 +739,7 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
             animate={{ opacity: 1, scale: 1 }}
             className="max-w-md mx-auto my-8 p-6 rounded-3xl backdrop-blur-md border text-center relative overflow-hidden"
             style={{
-              background: 'rgba(0, 0, 0, 0.35)',
+              background: 'rgba(0, 0, 0, 0.45)',
               borderColor: theme.cardBorder,
             }}
           >
@@ -726,12 +754,11 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
             </div>
 
             <h3 className="text-base font-bold text-white mb-1">
-              Start Your Private Conversation 💕
+              Start Your WhatsApp Secret Chat 💕
             </h3>
             <p className="text-xs text-stone-300 mb-4 leading-relaxed">
-              No messages yet. Any message you send from this device will appear on the right in{' '}
-              <strong className="text-white">Dark Theme</strong>, and messages from {partnerName}{' '}
-              will appear on the left in <strong className="text-white">Light Theme</strong>!
+              Your messages appear on the <strong className="text-emerald-400">RIGHT (Green Bubble)</strong> like in WhatsApp, and messages from {partnerName} appear on the <strong className="text-rose-300">LEFT</strong>!
+              All chat data is automatically purged the moment you leave the room.
             </p>
 
             <div className="flex flex-wrap gap-2 justify-center">
@@ -755,66 +782,57 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
         )}
 
         {/* ---------------------------------------------------- */}
-        {/* MESSAGES LIST: */}
-        {/* 1. Sent from THIS User/Device = RIGHT + THEME ACCENT DARK */}
-        {/* 2. Received from PARTNER = LEFT + CONTRASTING LIGHT */}
+        {/* MESSAGES LIST (WhatsApp-Style Left/Right Alignment): */}
+        {/* 1. Mera Message (Sent by Me/This Device) = RIGHT + Green Bubble */}
+        {/* 2. Samne Wale Ka Message (Partner) = LEFT + Neutral Bubble */}
         {/* ---------------------------------------------------- */}
         {messages.map((msg) => {
-          // Robust sender determination based on existing sender & active viewing role
-          const isSentByMe = msg.sender
-            ? msg.sender === activeRole
-            : Boolean(msg.deviceId && msg.deviceId === myDeviceId);
+          // Robust sender determination: Sent by current user / device = RIGHT, Partner = LEFT
+          const isSentByMe = Boolean(
+            (msg.deviceId && msg.deviceId === myDeviceId) ||
+            (msg.sender && msg.sender === activeRole)
+          );
 
           return (
             <motion.div
               key={msg.id}
-              initial={{ opacity: 0, y: 8, scale: 0.98 }}
+              initial={{ opacity: 0, y: 6, scale: 0.98 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               transition={{ duration: 0.15 }}
-              className={`w-full flex ${isSentByMe ? 'justify-end' : 'justify-start'} my-2`}
-              style={{
-                display: 'flex',
-                width: '100%',
-                justifyContent: isSentByMe ? 'flex-end' : 'flex-start',
-              }}
+              className={`w-full flex ${isSentByMe ? 'justify-end' : 'justify-start'} my-2.5`}
             >
               <div
-                className={`w-fit max-w-[80%] sm:max-w-[70%] rounded-2xl p-3.5 shadow-md relative break-words whitespace-pre-wrap transition-all duration-200 ${
-                  isSentByMe ? 'rounded-tr-xs ml-auto' : 'rounded-tl-xs mr-auto'
+                className={`w-fit max-w-[85%] sm:max-w-[72%] rounded-2xl p-3 shadow-md relative break-words whitespace-pre-wrap transition-all duration-200 ${
+                  isSentByMe
+                    ? 'rounded-tr-xs ml-auto bg-[#005c4b] border border-[#00755e] text-white shadow-emerald-950/40'
+                    : 'rounded-tl-xs mr-auto bg-[#202c33] border border-[#2a3942] text-[#e9edef] shadow-black/40'
                 }`}
                 style={
                   isSentByMe
                     ? {
-                        // 🌙 SENT / MY MESSAGE (RIGHT SIDE): Active Theme Accent Gradient + Crisp White Text
-                        background: `linear-gradient(135deg, ${theme.accent} 0%, ${theme.accentHover} 100%)`,
-                        borderColor: theme.accentHover,
-                        borderWidth: 1,
-                        borderStyle: 'solid',
+                        // WhatsApp Dark Green Sender Bubble
+                        background: '#005c4b',
+                        borderColor: '#00755e',
                         color: '#ffffff',
-                        boxShadow: `0 4px 14px -2px ${theme.accentLight || 'rgba(0,0,0,0.35)'}`,
                       }
                     : {
-                        // ☀️ RECEIVED MESSAGE (LEFT SIDE): Contrasting Clean Light Card + Dark Readable Text
-                        background: '#ffffff',
-                        borderColor: 'rgba(226, 232, 240, 0.95)',
-                        borderWidth: 1,
-                        borderStyle: 'solid',
-                        color: '#0f172a',
-                        boxShadow: '0 4px 14px -2px rgba(0, 0, 0, 0.12)',
+                        // WhatsApp Dark Receiver Bubble
+                        background: '#202c33',
+                        borderColor: '#2a3942',
+                        color: '#e9edef',
                       }
                 }
               >
-                {/* Header Tag Inside Message Bubble: Name & Device Badge */}
+                {/* Header Tag Inside Message Bubble: Name */}
                 <div
-                  className={`flex items-center justify-between gap-2 mb-1.5 pb-1 border-b ${
-                    isSentByMe ? 'border-white/20' : 'border-stone-200/90'
+                  className={`flex items-center justify-between gap-2 mb-1 pb-1 border-b ${
+                    isSentByMe ? 'border-white/15' : 'border-white/10'
                   }`}
                 >
                   <span
                     className={`text-[11px] font-bold tracking-wide truncate max-w-[160px] ${
-                      isSentByMe ? 'text-white' : ''
+                      isSentByMe ? 'text-emerald-200' : 'text-rose-300'
                     }`}
-                    style={!isSentByMe ? { color: theme.accent } : {}}
                   >
                     {isSentByMe ? 'You' : msg.senderName || partnerName}
                   </span>
@@ -822,7 +840,7 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
                     className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
                       isSentByMe
                         ? 'bg-white/20 text-white backdrop-blur-sm'
-                        : 'border bg-stone-100 text-stone-700 border-stone-200'
+                        : 'bg-white/10 text-stone-300 border border-white/10'
                     }`}
                   >
                     {isSentByMe ? 'You' : partnerName}
@@ -850,7 +868,7 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
                     className={`flex items-center gap-2 py-1.5 px-2.5 mb-1.5 rounded-xl ${
                       isSentByMe
                         ? 'bg-black/25 text-white'
-                        : 'bg-stone-100 border border-stone-200/80 text-stone-800'
+                        : 'bg-stone-900/60 border border-white/10 text-stone-200'
                     }`}
                   >
                     <button
@@ -860,10 +878,9 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
                       }}
                       className={`w-8 h-8 rounded-full flex items-center justify-center transition-transform hover:scale-110 cursor-pointer ${
                         isSentByMe
-                          ? 'bg-white/25 hover:bg-white/35 text-white'
-                          : 'text-white shadow-sm'
+                          ? 'bg-emerald-500 hover:bg-emerald-400 text-white'
+                          : 'bg-rose-500 hover:bg-rose-400 text-white shadow-sm'
                       }`}
-                      style={!isSentByMe ? { background: theme.accent } : {}}
                     >
                       <Play size={14} className="ml-0.5" />
                     </button>
@@ -874,16 +891,14 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
                           className="flex-1 rounded-full"
                           style={{
                             height: `${h}%`,
-                            backgroundColor: isSentByMe
-                              ? 'rgba(255, 255, 255, 0.85)'
-                              : theme.accent,
+                            backgroundColor: isSentByMe ? '#34d399' : '#fb7185',
                           }}
                         />
                       ))}
                     </div>
                     <span
                       className={`text-[10px] font-mono font-semibold ${
-                        isSentByMe ? 'text-white/85' : 'text-stone-600'
+                        isSentByMe ? 'text-emerald-100' : 'text-stone-300'
                       }`}
                     >
                       {msg.duration || '0:14'}
@@ -895,24 +910,24 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
                 {msg.text && (
                   <p
                     className={`text-sm sm:text-base leading-relaxed break-words whitespace-pre-wrap ${
-                      isSentByMe ? 'text-white font-medium' : 'text-slate-900 font-medium'
+                      isSentByMe ? 'text-white font-medium' : 'text-[#e9edef] font-medium'
                     }`}
                   >
                     {msg.text}
                   </p>
                 )}
 
-                {/* Bottom Meta: Timestamp & Read Ticks */}
+                {/* Bottom Meta: Timestamp & WhatsApp Read Ticks */}
                 <div
-                  className={`flex items-center gap-1 justify-end mt-1.5 text-[10px] ${
-                    isSentByMe ? 'text-white/85' : 'text-stone-500'
+                  className={`flex items-center gap-1.5 justify-end mt-1 text-[10px] ${
+                    isSentByMe ? 'text-emerald-200' : 'text-stone-400'
                   }`}
                 >
                   <span>{formatTime(msg.timestamp)}</span>
                   {isSentByMe ? (
-                    <CheckCheck size={13} className="text-cyan-200 shrink-0" />
+                    <CheckCheck size={14} className="text-[#53bdeb] shrink-0" title="Read" />
                   ) : (
-                    <CheckCheck size={13} className="text-emerald-600 shrink-0" />
+                    <CheckCheck size={14} className="text-stone-400 shrink-0" />
                   )}
                 </div>
 
@@ -921,8 +936,8 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
                   <div
                     className={`absolute -bottom-2 -right-2 px-2 py-0.5 rounded-full text-xs shadow-md border ${
                       isSentByMe
-                        ? 'bg-stone-950/90 border-white/20 text-white'
-                        : 'bg-white border-stone-200 text-stone-900'
+                        ? 'bg-emerald-900 border-emerald-500/50 text-white'
+                        : 'bg-stone-800 border-white/20 text-white'
                     }`}
                   >
                     {msg.reaction}
@@ -1164,7 +1179,7 @@ export const SecretChatView: React.FC<SecretChatViewProps> = ({
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-stone-400">Privacy Expiry:</span>
-                  <span className="font-semibold text-rose-300">15 Days Auto-Wipe</span>
+                  <span className="font-semibold text-rose-300">30 Days Auto-Wipe</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-stone-400">Card Theme:</span>

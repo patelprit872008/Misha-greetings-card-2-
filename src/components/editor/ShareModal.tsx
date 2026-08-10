@@ -357,11 +357,11 @@ export const ShareModal: React.FC<ShareModalProps> = ({
             </motion.div>
           )}
 
-          {/* 15-Day Auto-Destruct Privacy Highlight */}
+          {/* 30-Day Cloud Persistence & Privacy Highlight */}
           <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-stone-300 text-xs flex items-center gap-2">
             <Clock size={16} className="text-rose-400 shrink-0" />
             <span>
-              <strong>15-Day Auto-Destruct Cloud Privacy:</strong> Uploaded photos and secret chat messages are isolated to this card and automatically erased after 15 days for absolute privacy.
+              <strong>30-Day Guaranteed Cloud Persistence:</strong> Your complete card, uploaded photos, voice notes, music, and secret messages stay live and accessible for 30 days without disappearing.
             </span>
           </div>
         </div>

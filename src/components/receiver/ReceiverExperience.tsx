@@ -25,7 +25,6 @@ import { LetterSection } from './LetterSection';
 import { ReceiverResponseBar } from './ReceiverResponseBar';
 import { SecretChatView } from '../chat/SecretChatView';
 import { QRCodeModal } from '../common/QRCodeModal';
-import { encodePageDataToHash } from '../../utils/compression';
 
 interface ReceiverExperienceProps {
   data: HeartPageData;
@@ -63,10 +62,10 @@ export const ReceiverExperience: React.FC<ReceiverExperienceProps> = ({
     }
   };
 
-  // Build current guaranteed shareable link
+  // Build current clean short link
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const hashData = encodePageDataToHash(data);
-  const shareableUrl = `${origin}/?p=${data.id}#d=${hashData}`;
+  const shortId = data.short_id || data.shortId || data.id;
+  const shareableUrl = `${origin}/g/${shortId}`;
 
   // If full-page WhatsApp chat is open, render SecretChatView directly
   if (isChatOpen) {

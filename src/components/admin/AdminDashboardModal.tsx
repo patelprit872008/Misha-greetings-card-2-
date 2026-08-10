@@ -276,7 +276,7 @@ export const AdminDashboardModal: React.FC = () => {
               <span className="text-2xl font-bold font-serif-display text-white">
                 {stats?.totalCards ?? cards.length}
               </span>
-              <span className="text-[10px] text-rose-400">15-day TTL</span>
+              <span className="text-[10px] text-rose-400">30-day TTL</span>
             </div>
           </div>
 
