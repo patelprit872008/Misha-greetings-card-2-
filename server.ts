@@ -689,7 +689,7 @@ async function startServer() {
     const redirectUri =
       (req.query.redirect_uri as string) ||
       process.env.GOOGLE_REDIRECT_URI ||
-      'https://transcendent-scone-65721a.netlify.app/';
+      'https://mishagreetingscard.netlify.app/';
     const clientId =
       process.env.GOOGLE_CLIENT_ID ||
       process.env.CLIENT_ID ||

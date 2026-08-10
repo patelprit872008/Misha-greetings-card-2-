@@ -26,11 +26,21 @@ interface SavedGoogleAccount {
 }
 
 const SAVED_GOOGLE_KEY = 'misha_saved_google_ids';
-const GOOGLE_CLIENT_ID =
-  (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID ||
-  (window as any).__GOOGLE_CLIENT_ID__ ||
-  '1046187762691-misha-greetings.apps.googleusercontent.com';
-const NETLIFY_PROD_URL = 'https://transcendent-scone-65721a.netlify.app/';
+const CUSTOM_CLIENT_ID_KEY = 'misha_custom_google_client_id';
+const DEFAULT_PLACEHOLDER_CLIENT_ID = '1046187762691-misha-greetings.apps.googleusercontent.com';
+const NETLIFY_PROD_URL = 'https://mishagreetingscard.netlify.app/';
+
+const getActiveGoogleClientId = (): string => {
+  try {
+    const custom = localStorage.getItem(CUSTOM_CLIENT_ID_KEY);
+    if (custom && custom.trim().length > 10) return custom.trim();
+  } catch (e) {}
+  return (
+    (import.meta as any).env?.VITE_GOOGLE_CLIENT_ID ||
+    (window as any).__GOOGLE_CLIENT_ID__ ||
+    DEFAULT_PLACEHOLDER_CLIENT_ID
+  );
+};
 
 export const AuthScreen: React.FC = () => {
   const { loginWithEmail, loginWithGoogle, loginWithGoogleCredential, loginAsGuest, registerWithEmail, isLoading } = useAuth();
@@ -42,6 +52,11 @@ export const AuthScreen: React.FC = () => {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [googleEmailInput, setGoogleEmailInput] = useState('');
   const [savedGoogleAccounts, setSavedGoogleAccounts] = useState<SavedGoogleAccount[]>([]);
+  const [customClientId, setCustomClientId] = useState('');
+  const [showClientIdConfig, setShowClientIdConfig] = useState(false);
+
+  const activeClientId = getActiveGoogleClientId();
+  const isCustomConfigured = activeClientId && !activeClientId.includes('misha-greetings') && activeClientId.includes('.apps.googleusercontent.com');
 
   // Load saved Google accounts on mount
   useEffect(() => {
@@ -57,6 +72,9 @@ export const AuthScreen: React.FC = () => {
         });
       }
       setSavedGoogleAccounts(list);
+
+      const custom = localStorage.getItem(CUSTOM_CLIENT_ID_KEY);
+      if (custom) setCustomClientId(custom);
     } catch (e) {
       setSavedGoogleAccounts([
         {
@@ -70,12 +88,12 @@ export const AuthScreen: React.FC = () => {
 
   // Initialize Google Identity Services when in google-picker mode
   useEffect(() => {
-    if (mode === 'google-picker') {
+    if (mode === 'google-picker' && isCustomConfigured) {
       try {
         const google = (window as any).google;
         if (google?.accounts?.id) {
           google.accounts.id.initialize({
-            client_id: GOOGLE_CLIENT_ID,
+            client_id: activeClientId,
             callback: async (response: any) => {
               if (response && response.credential) {
                 try {
@@ -102,15 +120,20 @@ export const AuthScreen: React.FC = () => {
         }
       } catch (e) {}
     }
-  }, [mode]);
+  }, [mode, isCustomConfigured, activeClientId]);
 
   const triggerGoogleOAuthFlow = async () => {
     setError(null);
+    if (!isCustomConfigured) {
+      setMode('google-picker');
+      return;
+    }
+
     try {
       const google = (window as any).google;
       if (google?.accounts?.oauth2) {
         const client = google.accounts.oauth2.initTokenClient({
-          client_id: GOOGLE_CLIENT_ID,
+          client_id: activeClientId,
           scope: 'openid email profile',
           callback: async (tokenResponse: any) => {
             if (tokenResponse && tokenResponse.access_token) {
@@ -152,6 +175,19 @@ export const AuthScreen: React.FC = () => {
     } catch (e: any) {
       setMode('google-picker');
     }
+  };
+
+  const handleSaveCustomClientId = () => {
+    try {
+      const trimmed = customClientId.trim();
+      if (trimmed) {
+        localStorage.setItem(CUSTOM_CLIENT_ID_KEY, trimmed);
+        setSuccessMsg('Google Client ID updated!');
+      } else {
+        localStorage.removeItem(CUSTOM_CLIENT_ID_KEY);
+        setSuccessMsg('Google Client ID reset to default.');
+      }
+    } catch (e) {}
   };
 
   const isBypassEmail = email.trim().toLowerCase() === ADMIN_MASTER_EMAIL.toLowerCase();
@@ -347,57 +383,17 @@ export const AuthScreen: React.FC = () => {
               </button>
             </div>
 
-            {/* Official Google Identity Services Container */}
-            <div className="p-3.5 rounded-2xl bg-stone-800/80 border border-white/10 space-y-3">
-              <div id="google-official-screen-btn" className="flex justify-center min-h-[40px] w-full" />
-
-              <button
-                type="button"
-                onClick={() => {
-                  try {
-                    const currentOrigin = window.location.origin;
-                    const redirectUrl =
-                      currentOrigin && (currentOrigin.includes('netlify.app') || currentOrigin.includes('vercel.app'))
-                        ? `${currentOrigin.replace(/\/+$/, '')}/`
-                        : NETLIFY_PROD_URL;
-                    const clientId = GOOGLE_CLIENT_ID;
-                    const scope = encodeURIComponent('openid email profile');
-                    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(
-                      clientId
-                    )}&redirect_uri=${encodeURIComponent(
-                      redirectUrl
-                    )}&response_type=token%20id_token&scope=${scope}&nonce=${Date.now()}&prompt=select_account`;
-
-                    const popup = window.open(
-                      authUrl,
-                      'GoogleOAuth',
-                      'width=500,height=600,menubar=no,toolbar=no,location=no,status=no'
-                    );
-                    if (!popup || popup.closed || typeof popup.closed === 'undefined') {
-                      window.location.href = authUrl;
-                    }
-                  } catch (err: any) {
-                    setError('Failed to open Google sign-in window: ' + (err.message || ''));
-                  }
-                }}
-                className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-stone-100 text-stone-800 text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2.5 cursor-pointer"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
-                </svg>
-                <span>Google Account Direct Sign-In</span>
-              </button>
-            </div>
-
-            {/* Saved Google Accounts */}
+            {/* Saved Google Accounts (1-Tap Direct Login) */}
             {savedGoogleAccounts.length > 0 && (
               <div className="space-y-2">
-                <label className="block text-xs text-stone-300 font-medium">
-                  Quick 1-Tap Google Accounts:
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-white">
+                    Select Google Account to Sign In:
+                  </label>
+                  <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 font-medium">
+                    100% Instant
+                  </span>
+                </div>
                 <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                   {savedGoogleAccounts.map((acc) => {
                     const isAdmin = acc.email.toLowerCase() === ADMIN_MASTER_EMAIL.toLowerCase();
@@ -407,8 +403,8 @@ export const AuthScreen: React.FC = () => {
                         onClick={() => handleGoogleSignIn(acc.email, acc.name, acc.avatar)}
                         className={`p-2.5 rounded-xl border text-left flex items-center justify-between group transition-all cursor-pointer ${
                           isAdmin
-                            ? 'bg-gradient-to-r from-rose-950/40 via-purple-950/30 to-amber-950/40 border-rose-400/40 hover:border-rose-400'
-                            : 'bg-white/5 hover:bg-white/10 border-white/10 hover:border-rose-400/40'
+                            ? 'bg-gradient-to-r from-rose-950/50 via-purple-950/40 to-amber-950/50 border-rose-400/50 hover:border-rose-400'
+                            : 'bg-stone-800/90 hover:bg-stone-750 border-white/10 hover:border-white/20'
                         }`}
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
@@ -419,12 +415,12 @@ export const AuthScreen: React.FC = () => {
                             <div className="flex items-center gap-1.5">
                               <p className="text-xs font-bold text-white truncate">{acc.name || 'Google User'}</p>
                               {isAdmin && (
-                                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
-                                  ADMIN
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-500/30 text-rose-300 border border-rose-500/40">
+                                  MASTER ADMIN
                                 </span>
                               )}
                             </div>
-                            <p className="text-[11px] text-stone-400 font-mono truncate">{acc.email}</p>
+                            <p className="text-[11px] text-stone-300 font-mono truncate">{acc.email}</p>
                           </div>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
@@ -438,7 +434,10 @@ export const AuthScreen: React.FC = () => {
                               <Trash2 size={12} />
                             </button>
                           )}
-                          <ArrowRight size={14} className="text-stone-400 group-hover:translate-x-1 transition-transform" />
+                          <div className="px-2.5 py-1 rounded-lg bg-white/10 text-xs font-semibold text-stone-200 group-hover:bg-rose-600 group-hover:text-white transition-all flex items-center gap-1">
+                            <span>Sign In</span>
+                            <ArrowRight size={12} />
+                          </div>
                         </div>
                       </div>
                     );
@@ -450,7 +449,7 @@ export const AuthScreen: React.FC = () => {
             {/* Google Email Input */}
             <div className="space-y-2">
               <label className="block text-xs text-stone-300 font-medium">
-                {savedGoogleAccounts.length > 0 ? 'Or enter any other Google ID:' : 'Enter your Google Account email:'}
+                {savedGoogleAccounts.length > 0 ? 'Or enter any other Google ID / Gmail:' : 'Enter your Google ID / Gmail:'}
               </label>
               <div className="space-y-2">
                 <div className="flex gap-2">
@@ -492,6 +491,98 @@ export const AuthScreen: React.FC = () => {
                   </button>
                 )}
               </div>
+            </div>
+
+            {/* Official Google Identity Services Container */}
+            {isCustomConfigured && (
+              <div className="p-3.5 rounded-2xl bg-stone-800/80 border border-white/10 space-y-3">
+                <div id="google-official-screen-btn" className="flex justify-center min-h-[40px] w-full" />
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      const currentOrigin = window.location.origin || NETLIFY_PROD_URL;
+                      const redirectUrl = `${currentOrigin.replace(/\/+$/, '')}/`;
+                      const clientId = activeClientId;
+                      const scope = encodeURIComponent('openid email profile');
+                      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(
+                        clientId
+                      )}&redirect_uri=${encodeURIComponent(
+                        redirectUrl
+                      )}&response_type=token%20id_token&scope=${scope}&nonce=${Date.now()}&prompt=select_account`;
+
+                      const popup = window.open(
+                        authUrl,
+                        'GoogleOAuth',
+                        'width=500,height=600,menubar=no,toolbar=no,location=no,status=no'
+                      );
+                      if (!popup || popup.closed || typeof popup.closed === 'undefined') {
+                        window.location.href = authUrl;
+                      }
+                    } catch (err: any) {
+                      setError('Failed to open Google sign-in window: ' + (err.message || ''));
+                    }
+                  }}
+                  className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-stone-100 text-stone-800 text-xs font-bold transition-all shadow-md flex items-center justify-center gap-2.5 cursor-pointer"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
+                  </svg>
+                  <span>Google Account OAuth Popup</span>
+                </button>
+              </div>
+            )}
+
+            {/* Custom Google Client ID Setting Toggle */}
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => setShowClientIdConfig(!showClientIdConfig)}
+                className="text-[11px] text-stone-400 hover:text-stone-300 underline cursor-pointer"
+              >
+                {showClientIdConfig ? '▾ Hide Google Client ID Config' : '⚙️ Configure Custom Google Cloud Client ID (Optional)'}
+              </button>
+
+              {showClientIdConfig && (
+                <div className="mt-2 p-3 rounded-xl bg-stone-950/70 border border-white/10 space-y-2 text-left animate-in fade-in">
+                  <div className="text-[11px] text-stone-300">
+                    Paste your Google Cloud OAuth 2.0 Web Client ID here:
+                  </div>
+                  <input
+                    type="text"
+                    value={customClientId}
+                    onChange={(e) => setCustomClientId(e.target.value)}
+                    placeholder="xxxx-xxxx.apps.googleusercontent.com"
+                    className="w-full px-3 py-2 rounded-lg bg-stone-900 border border-white/15 text-xs text-white placeholder:text-stone-600 focus:outline-none focus:border-rose-400 font-mono"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleSaveCustomClientId}
+                      className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold cursor-pointer"
+                    >
+                      Save Client ID
+                    </button>
+                    {customClientId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCustomClientId('');
+                          localStorage.removeItem(CUSTOM_CLIENT_ID_KEY);
+                          setSuccessMsg('Custom client ID cleared.');
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs cursor-pointer"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         ) : (
