@@ -238,6 +238,23 @@ export const CreatorStudio: React.FC<CreatorStudioProps> = ({
     });
   };
 
+  const uploadMediaToServer = async (dataUrl: string, filename?: string): Promise<string> => {
+    try {
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataUrl, filename }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.url) return json.url;
+      }
+    } catch (e) {
+      console.warn('Direct upload to /api/upload failed, using local data URL:', e);
+    }
+    return dataUrl;
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -246,9 +263,10 @@ export const CreatorStudio: React.FC<CreatorStudioProps> = ({
       const file = files[i];
       try {
         const compressedUrl = await compressImage(file);
-        addPhoto(compressedUrl, file.name.replace(/\.[^/.]+$/, ''));
+        const persistentUrl = await uploadMediaToServer(compressedUrl, file.name);
+        addPhoto(persistentUrl, file.name.replace(/\.[^/.]+$/, ''));
       } catch (err) {
-        console.error('Failed to compress image:', err);
+        console.error('Failed to process image:', err);
       }
     }
     if (fileInputRef.current) {

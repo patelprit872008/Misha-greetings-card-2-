@@ -25,7 +25,6 @@ import {
   Printer,
 } from 'lucide-react';
 import { HeartPageData } from '../../types';
-import { encodePageDataToHash } from '../../utils/compression';
 
 interface ShareModalProps {
   isOpen: boolean;
@@ -48,24 +47,18 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const [showQr, setShowQr] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
 
-  // Build the clean receiver URL
+  // Build clean server-backed receiver URL with short unique ID (e.g. /g/X7kP92)
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const hashData = encodePageDataToHash(data);
+  const shortId = data.short_id || data.shortId || data.id;
 
-  // Clean canonical short link (e.g. https://domain/?p=card-xyz)
-  const shortLink = publishedUrl
+  // Canonical clean short URL (https://domain.com/g/X7kP92)
+  const finalLink = publishedUrl
     ? (publishedUrl.includes('#') ? publishedUrl.split('#')[0] : publishedUrl)
-    : `${origin}/?p=${data.id}`;
-
-  const finalLink = shortLink;
-  const resilientOfflineLink = `${shortLink}#data=${hashData}`;
+    : `${origin}/g/${shortId}`;
 
   const receiverDisplayName = (data.hero.receiverNickname || data.hero.receiverName || 'Your Partner').trim();
   const chatKey = (data.chatKey || 'LOVE-9999').trim().toUpperCase();
-  const directChatLink = `${shortLink}${shortLink.includes('?') ? '&' : '?'}chat=1&key=${chatKey}`;
-
-  const [copiedOfflineLink, setCopiedOfflineLink] = useState(false);
-  const [showAdvancedLink, setShowAdvancedLink] = useState(false);
+  const directChatLink = `${finalLink}${finalLink.includes('?') ? '&' : '?'}chat=1&key=${chatKey}`;
 
   useEffect(() => {
     if (isOpen && finalLink) {
@@ -109,12 +102,6 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     setTimeout(() => setCopiedChatLink(false), 2500);
   };
 
-  const handleCopyOfflineLink = () => {
-    navigator.clipboard.writeText(resilientOfflineLink);
-    setCopiedOfflineLink(true);
-    setTimeout(() => setCopiedOfflineLink(false), 2500);
-  };
-
   const handleDownloadQr = () => {
     if (!qrDataUrl) return;
     const a = document.createElement('a');
@@ -148,7 +135,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                 Share Your 1-Page Micro-Site & Secret Chat 💌
               </h3>
               <p className="text-xs text-stone-400">
-                Send this link and secret passkey to <strong className="text-rose-300">{data.hero.receiverNickname || data.hero.receiverName || 'them'}</strong>!
+                Send this short link and secret passkey to <strong className="text-rose-300">{data.hero.receiverNickname || data.hero.receiverName || 'them'}</strong>!
               </p>
             </div>
           </div>
@@ -192,13 +179,14 @@ export const ShareModal: React.FC<ShareModalProps> = ({
 
           {/* 1. Main Website Link Box */}
           <div>
-            <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
-              <span className="flex items-center gap-1.5">
-                <span>Your Shareable Card Link</span>
-                <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[10px] normal-case font-medium">⚡ Short Link</span>
-              </span>
-              <span className="text-[10px] text-rose-400 font-normal">Opens full interactive card</span>
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold text-stone-300 uppercase tracking-wider flex items-center gap-1.5">
+                <span>💌 Short Published Card Link</span>
+                <span className="px-1.5 py-0.5 rounded text-[10px] normal-case font-medium bg-emerald-500/20 text-emerald-300">
+                  ✅ Server-Backed
+                </span>
+              </label>
+            </div>
 
             <div className="flex items-center gap-2 p-2 rounded-xl bg-black/60 border border-white/15">
               <input
@@ -217,6 +205,9 @@ export const ShareModal: React.FC<ShareModalProps> = ({
                 <span>{copiedLink ? 'Copied!' : 'Copy Link'}</span>
               </button>
             </div>
+            <p className="text-[11px] text-stone-400 mt-1">
+              Short unique link saved permanently on the server with all photos, audio, and animations.
+            </p>
           </div>
 
           {/* 2. Secret Room Passkey Box */}
@@ -365,45 +356,6 @@ export const ShareModal: React.FC<ShareModalProps> = ({
               </p>
             </motion.div>
           )}
-
-          {/* Advanced / Offline Resilient Link Toggle */}
-          <div className="pt-1">
-            <button
-              type="button"
-              onClick={() => setShowAdvancedLink(!showAdvancedLink)}
-              className="text-[11px] text-stone-400 hover:text-stone-300 flex items-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <span>{showAdvancedLink ? '▾ Hide Offline Self-Contained Link' : '▸ Need 100% Offline Link? (Advanced)'}</span>
-            </button>
-
-            {showAdvancedLink && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                className="mt-2 p-3 rounded-xl bg-black/40 border border-white/10 space-y-2"
-              >
-                <div className="flex items-center justify-between text-[11px] text-stone-300">
-                  <span className="font-semibold">Self-Contained Offline Link</span>
-                  <span className="text-[10px] text-stone-500">Includes embedded card data</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="text"
-                    readOnly
-                    value={resilientOfflineLink}
-                    className="flex-1 bg-black/60 px-2 py-1.5 rounded-lg text-[10px] text-stone-400 font-mono focus:outline-none truncate"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleCopyOfflineLink}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold text-stone-200 bg-white/10 hover:bg-white/20 transition-all shrink-0 cursor-pointer"
-                  >
-                    {copiedOfflineLink ? 'Copied!' : 'Copy'}
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </div>
 
           {/* 15-Day Auto-Destruct Privacy Highlight */}
           <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-stone-300 text-xs flex items-center gap-2">

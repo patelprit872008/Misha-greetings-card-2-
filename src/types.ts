@@ -197,6 +197,8 @@ export interface ChatMessage {
 
 export interface HeartPageData {
   id: string;
+  shortId?: string;
+  short_id?: string;
   title: string;
   category: RelationshipCategory;
   theme: ThemeId;
@@ -218,6 +220,23 @@ export interface HeartPageData {
   createdAt: string;
   updatedAt: string;
   expiresAt?: string;
+}
+
+export interface PublishedGreeting {
+  id: string;
+  short_id: string;
+  owner_id?: string;
+  title: string;
+  project_json: HeartPageData;
+  status: 'published' | 'draft' | 'archived';
+  visibility: 'public' | 'unlisted' | 'private';
+  created_at: string;
+  updated_at: string;
+  expires_at?: string;
+  view_count: number;
+  chatKey?: string;
+  creatorName?: string;
+  creatorEmail?: string;
 }
 
 export interface User {

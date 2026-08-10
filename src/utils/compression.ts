@@ -37,44 +37,84 @@ export function decodePageDataFromHash(encoded: string): HeartPageData | null {
     if (!clean) return null;
 
     // Handle hash query formats like #d=... or #data=... or #card=...
-    if (clean.includes('d=')) {
-      const match = clean.match(/(?:^|[&?])(?:d|data|card)=([^&]+)/);
-      if (match && match[1]) {
-        clean = match[1];
-      }
+    const match = clean.match(/(?:^|[&?#])(?:d|data|card)=([^&]+)/);
+    if (match && match[1]) {
+      clean = match[1];
     }
 
-    // 1. Try LZString decompression first
+    let unescapedClean = clean;
     try {
-      const lzDecompressed = LZString.decompressFromEncodedURIComponent(clean);
-      if (lzDecompressed) {
-        const parsed = JSON.parse(lzDecompressed) as HeartPageData;
+      unescapedClean = decodeURIComponent(clean);
+    } catch (e) {
+      unescapedClean = clean;
+    }
+
+    const candidates = [clean, unescapedClean];
+
+    // 1. Try LZString decompression
+    for (const cand of candidates) {
+      try {
+        const lz = LZString.decompressFromEncodedURIComponent(cand);
+        if (lz) {
+          const parsed = JSON.parse(lz) as HeartPageData;
+          if (parsed && typeof parsed === 'object' && (parsed.hero || parsed.id)) {
+            return parsed;
+          }
+        }
+      } catch (e) {}
+
+      try {
+        const lz = LZString.decompress(cand);
+        if (lz) {
+          const parsed = JSON.parse(lz) as HeartPageData;
+          if (parsed && typeof parsed === 'object' && (parsed.hero || parsed.id)) {
+            return parsed;
+          }
+        }
+      } catch (e) {}
+
+      try {
+        const lz = LZString.decompressFromBase64(cand);
+        if (lz) {
+          const parsed = JSON.parse(lz) as HeartPageData;
+          if (parsed && typeof parsed === 'object' && (parsed.hero || parsed.id)) {
+            return parsed;
+          }
+        }
+      } catch (e) {}
+    }
+
+    // 2. Try direct JSON parse
+    for (const cand of candidates) {
+      try {
+        const parsed = JSON.parse(cand) as HeartPageData;
         if (parsed && typeof parsed === 'object' && (parsed.hero || parsed.id)) {
           return parsed;
         }
-      }
-    } catch (e) {}
+      } catch (e) {}
+    }
 
-    // 2. Try legacy Base64 decoding
-    try {
-      let base64 = clean;
+    // 3. Try legacy Base64 decoding
+    for (const cand of candidates) {
       try {
-        base64 = decodeURIComponent(clean);
-      } catch (e) {
-        base64 = clean;
-      }
-
-      const binary = atob(base64);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-      }
-      const jsonStr = new TextDecoder().decode(bytes);
-      const parsed = JSON.parse(jsonStr) as HeartPageData;
-      if (parsed && typeof parsed === 'object' && (parsed.hero || parsed.id)) {
-        return parsed;
-      }
-    } catch (e) {}
+        let base64 = cand;
+        try {
+          base64 = decodeURIComponent(cand);
+        } catch (e) {
+          base64 = cand;
+        }
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+          bytes[i] = binary.charCodeAt(i);
+        }
+        const jsonStr = new TextDecoder().decode(bytes);
+        const parsed = JSON.parse(jsonStr) as HeartPageData;
+        if (parsed && typeof parsed === 'object' && (parsed.hero || parsed.id)) {
+          return parsed;
+        }
+      } catch (e) {}
+    }
 
     return null;
   } catch (err) {

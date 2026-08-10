@@ -65,17 +65,24 @@ export function getInitialUrlReceiverState(): UrlReceiverState {
   const pathname = window.location.pathname || '';
 
   let pathId: string | null = null;
-  const pathMatch = pathname.match(/^\/(?:c|p|card|r|view)\/([a-zA-Z0-9_-]+)/i);
+  const pathMatch = pathname.match(/^\/(?:g|c|p|card|r|view)\/([a-zA-Z0-9_-]+)/i);
   if (pathMatch) {
     pathId = pathMatch[1];
   }
 
   const urlParams = new URLSearchParams(search);
-  const pageId = pathId || urlParams.get('p') || urlParams.get('c') || urlParams.get('id') || urlParams.get('card');
+  const pageId = pathId || urlParams.get('g') || urlParams.get('p') || urlParams.get('c') || urlParams.get('id') || urlParams.get('card');
   const forceView = urlParams.get('view') || urlParams.get('v');
   const chatParam = urlParams.get('chat');
   const keyParam = urlParams.get('key') || '';
-  const hasHash = Boolean(hash && hash.length > 5);
+  
+  // Extract data hash from hash or search query (?d=... or ?data=...) if any legacy links
+  const queryData = urlParams.get('d') || urlParams.get('data');
+  let effectiveHash = hash && hash.length > 2 ? hash : '';
+  if (!effectiveHash && queryData) {
+    effectiveHash = `#d=${queryData}`;
+  }
+  const hasHash = Boolean(effectiveHash && effectiveHash.length > 2);
 
   const isReceiver = Boolean(
     pageId ||
@@ -92,7 +99,7 @@ export function getInitialUrlReceiverState(): UrlReceiverState {
     isReceiver,
     pageId,
     hasHash,
-    hash,
+    hash: effectiveHash,
     isChat: chatParam === '1' || chatParam === 'true' || chatParam === 'chat',
     chatKey: keyParam,
   };
@@ -104,9 +111,44 @@ function MainApp() {
   // Instant synchronous detection of receiver visitor on initial load
   const initialUrlState = React.useMemo(() => getInitialUrlReceiverState(), []);
 
-  const [pageData, setPageData] = useState<HeartPageData>(() => getCleanDefaultTemplate(user?.name));
+  // Synchronously decode card data from hash on first render if present
+  const [pageData, setPageData] = useState<HeartPageData>(() => {
+    if (initialUrlState.hasHash && initialUrlState.hash) {
+      const decoded = decodePageDataFromHash(initialUrlState.hash);
+      if (decoded && (decoded.hero || decoded.id)) {
+        if (!decoded.chatKey) {
+          decoded.chatKey = `LOVE-${Math.floor(1000 + Math.random() * 9000)}`;
+        }
+        return decoded;
+      }
+    }
+    if (initialUrlState.pageId) {
+      try {
+        const cached =
+          localStorage.getItem(`heartpage_card_${initialUrlState.pageId}`) ||
+          localStorage.getItem(`heartpage_draft_${initialUrlState.pageId}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (parsed && (parsed.hero || parsed.id)) {
+            return parsed;
+          }
+        }
+      } catch (e) {}
+    }
+    return getCleanDefaultTemplate(user?.name);
+  });
+
   const [isReceiverMode, setIsReceiverMode] = useState<boolean>(() => initialUrlState.isReceiver);
-  const [isLoadingShared, setIsLoadingShared] = useState<boolean>(() => initialUrlState.isReceiver);
+  const [isLoadingShared, setIsLoadingShared] = useState<boolean>(() => {
+    // If hash was decoded synchronously, no loading spinner needed!
+    if (initialUrlState.hasHash && initialUrlState.hash) {
+      const decoded = decodePageDataFromHash(initialUrlState.hash);
+      if (decoded && (decoded.hero || decoded.id)) {
+        return false;
+      }
+    }
+    return initialUrlState.isReceiver;
+  });
   const [isBrandIntroLoading, setIsBrandIntroLoading] = useState<boolean>(() => !initialUrlState.isReceiver);
   const [initialChatOpen, setInitialChatOpen] = useState<boolean>(() => initialUrlState.isChat);
   const [initialChatKey, setInitialChatKey] = useState<string>(() => initialUrlState.chatKey);
@@ -210,27 +252,47 @@ function MainApp() {
             }
           } catch (e) {}
 
-          // C. Fetch from live Server API
+          // C. Fetch from live Server API (/api/g/:shortId or /api/pages/:id)
           try {
-            const res = await fetch(`/api/pages/${urlState.pageId}`);
-            const contentType = res.headers.get('content-type') || '';
-            if (res.ok && contentType.includes('application/json')) {
-              const serverData = await res.json();
-              if (serverData && (serverData.hero || serverData.id)) {
-                if (!serverData.chatKey) {
-                  serverData.chatKey = `LOVE-${Math.floor(1000 + Math.random() * 9000)}`;
+            const fetchEndpoints = [
+              `/api/g/${urlState.pageId}`,
+              `/api/pages/${urlState.pageId}`,
+            ];
+
+            for (const endpoint of fetchEndpoints) {
+              if (loadedData) break;
+              try {
+                const res = await fetch(endpoint);
+                const contentType = res.headers.get('content-type') || '';
+                if (res.ok && contentType.includes('application/json')) {
+                  const serverResponse = await res.json();
+                  // Extract greeting from response
+                  const serverData = serverResponse.greeting || serverResponse.project_json || serverResponse;
+                  if (serverData && (serverData.hero || serverData.id)) {
+                    if (!serverData.chatKey) {
+                      serverData.chatKey = `LOVE-${Math.floor(1000 + Math.random() * 9000)}`;
+                    }
+                    if (serverResponse.short_id || serverResponse.shortId) {
+                      serverData.short_id = serverResponse.short_id || serverResponse.shortId;
+                    }
+                    loadedData = serverData;
+                    setPageData(serverData);
+                    try {
+                      localStorage.setItem(`heartpage_card_${urlState.pageId}`, JSON.stringify(serverData));
+                      if (serverData.id) {
+                        localStorage.setItem(`heartpage_card_${serverData.id}`, JSON.stringify(serverData));
+                      }
+                    } catch (e) {}
+                    setIsLoadingShared(false);
+                    return;
+                  }
                 }
-                loadedData = serverData;
-                setPageData(serverData);
-                try {
-                  localStorage.setItem(`heartpage_card_${urlState.pageId}`, JSON.stringify(serverData));
-                } catch (e) {}
-                setIsLoadingShared(false);
-                return;
+              } catch (e) {
+                // Try next endpoint
               }
             }
           } catch (e) {
-            console.warn('Could not fetch from server, using local/fallback card:', e);
+            console.warn('Could not fetch from server, using fallback card:', e);
           }
 
           if (loadedData) {
@@ -308,9 +370,9 @@ function MainApp() {
   const handleSaveToServer = async (dataToSave?: HeartPageData): Promise<string | undefined> => {
     const payload = dataToSave || pageData;
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const cleanShortUrl = `${origin}/?p=${payload.id}`;
+    let fallbackShortUrl = `${origin}/g/${payload.short_id || payload.id}`;
 
-    // Cache locally immediately so link works offline & instantly
+    // Cache locally immediately
     try {
       if (payload && payload.id) {
         localStorage.setItem(`heartpage_card_${payload.id}`, JSON.stringify(payload));
@@ -334,6 +396,45 @@ function MainApp() {
 
     const activeToken = token || localStorage.getItem('misha_auth_token') || 'tok_creator_session';
 
+    // 1. Try primary server publish endpoint (/api/greetings/publish)
+    try {
+      const res = await fetch('/api/greetings/publish', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${activeToken}`,
+        },
+        body: JSON.stringify({
+          project_json: payload,
+          title: payload.hero.title || 'Romantic Greeting',
+          recipient_name: payload.hero.receiverName || payload.hero.receiverNickname,
+          sender_name: payload.hero.senderName,
+        }),
+      });
+
+      if (res.ok) {
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const result = await res.json();
+          if (result && result.success && result.url) {
+            if (result.short_id) {
+              setPageData((prev) => ({
+                ...prev,
+                short_id: result.short_id,
+              }));
+              try {
+                localStorage.setItem(`heartpage_card_${result.short_id}`, JSON.stringify({ ...payload, short_id: result.short_id }));
+              } catch (e) {}
+            }
+            return result.url;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Publish to /api/greetings/publish failed, falling back to /api/pages:', err);
+    }
+
+    // 2. Fallback to /api/pages
     try {
       const res = await fetch('/api/pages', {
         method: 'POST',
@@ -361,7 +462,7 @@ function MainApp() {
       console.warn('Save to server API call failed, using local short URL fallback:', err);
     }
 
-    return cleanShortUrl;
+    return fallbackShortUrl;
   };
 
   // Handle reaction from receiver

@@ -9,10 +9,34 @@ import fs from 'fs';
 import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 
-// Persistent storage file path
+// Persistent storage file path & media upload directory
 const DATA_BACKUP_FILE = path.join(process.cwd(), '.misha_data_store.json');
+const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) {
+  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
 
-// In-memory storage for created pages, reactions, and secret chats
+// Published Greeting Database Schema
+export interface GreetingRecord {
+  id: string;
+  short_id: string;
+  owner_id: string;
+  title: string;
+  project_json: any;
+  status: 'published' | 'draft' | 'archived';
+  visibility: 'public' | 'unlisted' | 'private';
+  created_at: string;
+  updated_at: string;
+  expires_at?: string;
+  view_count: number;
+  chatKey?: string;
+  creatorName?: string;
+  creatorEmail?: string;
+}
+
+// Persistent In-Memory Database Stores (Saved to Disk)
+const greetingsStore = new Map<string, GreetingRecord>(); // Keyed by canonical card id
+const shortIdIndex = new Map<string, string>(); // short_id -> card id
 const pagesStore = new Map<string, any>();
 const reactionsStore = new Map<string, any[]>();
 const chatStore = new Map<
@@ -42,10 +66,96 @@ export const ADMIN_EMAIL = 'patelprit872008@gmail.com';
 const usersStore = new Map<string, ServerUser>();
 const tokensStore = new Map<string, ServerUser>();
 
+// Helper to generate unique 6-character short IDs (e.g., X7kP92)
+function generateShortId(): string {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  for (let attempt = 0; attempt < 500; attempt++) {
+    let result = '';
+    for (let i = 0; i < 6; i++) {
+      result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    if (!shortIdIndex.has(result)) {
+      return result;
+    }
+  }
+  return `g${Date.now().toString(36).slice(-5)}`;
+}
+
+// Helper to resolve card ID from either short_id or full card ID
+function resolveCardId(idOrShortId: string): string {
+  if (!idOrShortId) return idOrShortId;
+  const clean = idOrShortId.trim();
+  if (shortIdIndex.has(clean)) {
+    return shortIdIndex.get(clean)!;
+  }
+  return clean;
+}
+
+// Helper to save base64 / data URL media to persistent uploads disk directory
+function saveBase64ToUploads(dataUrl: string, originalName?: string): string {
+  try {
+    if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
+      return dataUrl;
+    }
+    const matches = dataUrl.match(/^data:([a-zA-Z0-9/+-]+);base64,(.+)$/);
+    if (!matches || matches.length !== 3) {
+      return dataUrl;
+    }
+    const mimeType = matches[1];
+    const base64Data = matches[2];
+    const buffer = Buffer.from(base64Data, 'base64');
+
+    let ext = 'bin';
+    if (mimeType.includes('jpeg') || mimeType.includes('jpg')) ext = 'jpg';
+    else if (mimeType.includes('png')) ext = 'png';
+    else if (mimeType.includes('webp')) ext = 'webp';
+    else if (mimeType.includes('gif')) ext = 'gif';
+    else if (mimeType.includes('svg')) ext = 'svg';
+    else if (mimeType.includes('mp3') || mimeType.includes('mpeg')) ext = 'mp3';
+    else if (mimeType.includes('wav')) ext = 'wav';
+    else if (mimeType.includes('webm')) ext = 'webm';
+    else if (mimeType.includes('ogg') || mimeType.includes('opus')) ext = 'ogg';
+    else if (mimeType.includes('m4a') || mimeType.includes('aac')) ext = 'm4a';
+    else if (mimeType.includes('mp4')) ext = 'mp4';
+
+    const safeName = `media_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
+    const filePath = path.join(UPLOADS_DIR, safeName);
+    fs.writeFileSync(filePath, buffer);
+    return `/uploads/${safeName}`;
+  } catch (e) {
+    console.error('Failed to save base64 media to persistent uploads:', e);
+    return dataUrl;
+  }
+}
+
+// Deep Media Sanitizer: converts any embedded data: base64 in project JSON to persistent /uploads/... URLs
+function deepSanitizeMedia(obj: any): any {
+  if (!obj) return obj;
+  if (typeof obj === 'string') {
+    if (obj.startsWith('data:image/') || obj.startsWith('data:audio/') || obj.startsWith('data:video/')) {
+      return saveBase64ToUploads(obj);
+    }
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj.map((item) => deepSanitizeMedia(item));
+  }
+  if (typeof obj === 'object') {
+    const sanitized: any = {};
+    for (const key of Object.keys(obj)) {
+      sanitized[key] = deepSanitizeMedia(obj[key]);
+    }
+    return sanitized;
+  }
+  return obj;
+}
+
 // Save all stores to disk
 function saveStoreToDisk() {
   try {
     const backup = {
+      greetings: Array.from(greetingsStore.entries()),
+      shortIds: Array.from(shortIdIndex.entries()),
       pages: Array.from(pagesStore.entries()),
       reactions: Array.from(reactionsStore.entries()),
       chats: Array.from(chatStore.entries()),
@@ -64,6 +174,19 @@ function loadStoreFromDisk() {
     if (fs.existsSync(DATA_BACKUP_FILE)) {
       const raw = fs.readFileSync(DATA_BACKUP_FILE, 'utf8');
       const backup = JSON.parse(raw);
+      if (Array.isArray(backup.greetings)) {
+        for (const [k, v] of backup.greetings) {
+          greetingsStore.set(k, v);
+          if (v && v.short_id) {
+            shortIdIndex.set(v.short_id, k);
+          }
+        }
+      }
+      if (Array.isArray(backup.shortIds)) {
+        for (const [k, v] of backup.shortIds) {
+          shortIdIndex.set(k, v);
+        }
+      }
       if (Array.isArray(backup.pages)) {
         for (const [k, v] of backup.pages) pagesStore.set(k, v);
       }
@@ -79,7 +202,7 @@ function loadStoreFromDisk() {
       if (Array.isArray(backup.tokens)) {
         for (const [k, v] of backup.tokens) tokensStore.set(k, v);
       }
-      console.log(`[Database] Loaded ${pagesStore.size} greeting cards from persistent disk storage.`);
+      console.log(`[Database] Loaded ${greetingsStore.size} greetings (${pagesStore.size} cards) from persistent disk storage.`);
     }
   } catch (e) {
     console.warn('Could not load data store from disk:', e);
@@ -107,8 +230,20 @@ const FIFTEEN_DAYS_MS = 15 * 24 * 60 * 60 * 1000;
 // Periodic automatic cleanup of data older than 15 days
 function cleanupExpiredData() {
   const now = Date.now();
+  let cleanedGreetings = 0;
   let cleanedPages = 0;
   let cleanedChats = 0;
+
+  for (const [id, greeting] of greetingsStore.entries()) {
+    const expireTime = greeting.expires_at ? new Date(greeting.expires_at).getTime() : 0;
+    if (expireTime && now > expireTime) {
+      if (greeting.short_id) shortIdIndex.delete(greeting.short_id);
+      greetingsStore.delete(id);
+      pagesStore.delete(id);
+      reactionsStore.delete(id);
+      cleanedGreetings++;
+    }
+  }
 
   for (const [id, page] of pagesStore.entries()) {
     const expireTime = page.expiresAt ? new Date(page.expiresAt).getTime() : 0;
@@ -127,8 +262,9 @@ function cleanupExpiredData() {
     }
   }
 
-  if (cleanedPages > 0 || cleanedChats > 0) {
-    console.log(`[Auto-Cleanup] Purged ${cleanedPages} expired cards and ${cleanedChats} expired chats (15-day TTL).`);
+  if (cleanedGreetings > 0 || cleanedPages > 0 || cleanedChats > 0) {
+    saveStoreToDisk();
+    console.log(`[Auto-Cleanup] Purged ${cleanedGreetings} expired greetings, ${cleanedPages} pages, and ${cleanedChats} chats (15-day TTL).`);
   }
 }
 
@@ -602,7 +738,23 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json({ limit: '20mb' }));
+  app.use(express.json({ limit: '30mb' }));
+  app.use('/uploads', express.static(UPLOADS_DIR));
+
+  // API: Media Upload to Persistent Disk Storage (Replaces blob/base64 references)
+  app.post('/api/upload', (req, res) => {
+    try {
+      const { dataUrl, filename } = req.body;
+      if (!dataUrl || typeof dataUrl !== 'string') {
+        return res.status(400).json({ error: 'Valid dataUrl is required' });
+      }
+      const savedUrl = saveBase64ToUploads(dataUrl, filename);
+      return res.json({ success: true, url: savedUrl });
+    } catch (err: any) {
+      console.error('Media upload error:', err);
+      return res.status(500).json({ error: 'Failed to upload media file' });
+    }
+  });
 
   // Helper to generate unique romantic room passkey
   function generateChatKey(): string {
@@ -776,7 +928,7 @@ async function startServer() {
     });
   });
 
-  // Auth 3: Register new user (Password required for normal users)
+  // Auth 3: Register new user
   app.post('/api/auth/register', (req, res) => {
     const { email = '', password = '', name = '' } = req.body;
     const normalizedEmail = (email || '').trim().toLowerCase();
@@ -787,7 +939,6 @@ async function startServer() {
 
     const isAdmin = normalizedEmail === ADMIN_EMAIL.toLowerCase();
 
-    // Password validation: required for all non-admin users
     if (!isAdmin && (!password || password.trim().length < 4)) {
       return res.status(400).json({ error: 'Password is required (minimum 4 characters)' });
     }
@@ -866,7 +1017,7 @@ async function startServer() {
     });
   });
 
-  // Auth 5: Logout
+  // Auth 5.1: Logout
   app.post('/api/auth/logout', (req, res) => {
     const authHeader = req.headers.authorization || '';
     const token = authHeader.replace('Bearer ', '').trim() || (req.body?.token as string);
@@ -877,7 +1028,7 @@ async function startServer() {
     return res.json({ success: true });
   });
 
-  // Auth 6: Master Admin Stats & Management (Strictly restricted to verified Admin account)
+  // Auth 6: Master Admin Stats & Management
   app.get('/api/admin/stats', (req, res) => {
     const authHeader = req.headers.authorization || '';
     const token = authHeader.replace('Bearer ', '').trim() || (req.query.token as string);
@@ -889,26 +1040,28 @@ async function startServer() {
 
     cleanupExpiredData();
 
-    const allCards = Array.from(pagesStore.values()).map((p) => ({
-      id: p.id,
-      title: p.title || 'Untitled Card',
-      theme: p.theme,
-      senderName: p.hero?.senderName || 'Anonymous',
-      receiverName: p.hero?.receiverName || p.hero?.receiverNickname || 'Special One',
-      creatorEmail: p.creatorEmail || 'Anonymous',
-      creatorName: p.creatorName || p.hero?.senderName || 'Anonymous',
-      createdAt: p.createdAt,
-      expiresAt: p.expiresAt,
-      chatKey: p.chatKey,
-      reactionCount: (reactionsStore.get(p.id) || []).length,
-      chatMessageCount: (chatStore.get(p.id)?.messages || []).length,
+    const allCards = Array.from(greetingsStore.values()).map((g) => ({
+      id: g.id,
+      short_id: g.short_id,
+      title: g.title || 'Untitled Card',
+      theme: g.project_json?.theme,
+      senderName: g.project_json?.hero?.senderName || 'Anonymous',
+      receiverName: g.project_json?.hero?.receiverName || g.project_json?.hero?.receiverNickname || 'Special One',
+      creatorEmail: g.creatorEmail || 'Anonymous',
+      creatorName: g.creatorName || g.project_json?.hero?.senderName || 'Anonymous',
+      createdAt: g.created_at,
+      expiresAt: g.expires_at,
+      chatKey: g.chatKey,
+      view_count: g.view_count || 0,
+      reactionCount: (reactionsStore.get(g.id) || []).length,
+      chatMessageCount: (chatStore.get(g.id)?.messages || []).length,
     }));
 
     const allUsers = Array.from(usersStore.values()).map((u) => {
-      const userCards = Array.from(pagesStore.values()).filter(
-        (p) =>
-          (p.creatorEmail && p.creatorEmail.toLowerCase() === u.email.toLowerCase()) ||
-          (p.creatorId && p.creatorId === u.id)
+      const userCards = Array.from(greetingsStore.values()).filter(
+        (g) =>
+          (g.creatorEmail && g.creatorEmail.toLowerCase() === u.email.toLowerCase()) ||
+          (g.owner_id && g.owner_id === u.id)
       );
       return {
         id: u.id,
@@ -927,7 +1080,7 @@ async function startServer() {
       success: true,
       adminEmail: ADMIN_EMAIL,
       stats: {
-        totalCards: pagesStore.size,
+        totalCards: greetingsStore.size,
         totalReactions: Array.from(reactionsStore.values()).reduce((acc, curr) => acc + curr.length, 0),
         totalSecretChats: chatStore.size,
         totalUsers: usersStore.size,
@@ -937,11 +1090,9 @@ async function startServer() {
       cards: allCards,
       users: allUsers,
     });
-  });
-
-  // Admin Card Delete API
+  });  // Admin Card Delete API
   app.delete('/api/admin/cards/:id', (req, res) => {
-    const { id } = req.params;
+    const cardId = resolveCardId(req.params.id);
     const authHeader = req.headers.authorization || '';
     const token = authHeader.replace('Bearer ', '').trim();
     const user = token ? tokensStore.get(token) : null;
@@ -950,28 +1101,37 @@ async function startServer() {
       return res.status(403).json({ error: 'Access denied. Master Admin credentials required.' });
     }
 
-    pagesStore.delete(id);
-    reactionsStore.delete(id);
-    chatStore.delete(id);
+    const greeting = greetingsStore.get(cardId);
+    if (greeting && greeting.short_id) {
+      shortIdIndex.delete(greeting.short_id);
+    }
+    greetingsStore.delete(cardId);
+    pagesStore.delete(cardId);
+    reactionsStore.delete(cardId);
+    chatStore.delete(cardId);
+    saveStoreToDisk();
 
-    return res.json({ success: true, message: `Card ${id} deleted by Admin` });
+    return res.json({ success: true, message: `Card ${cardId} deleted by Admin` });
   });
 
-  // API 2: Save / Publish page (Safe & resilient with persistent disk storage)
-  app.post('/api/pages', (req, res) => {
+  // Reusable Publisher Logic (Clean server-side publishing with media sanitization & short ID)
+  function handleGreetingPublish(req: express.Request, res: express.Response) {
     try {
-      const pageData = req.body;
-      if (!pageData || !pageData.id) {
-        return res.status(400).json({ error: 'Invalid page data' });
+      const payload = req.body.project_json || req.body.greeting || req.body;
+      if (!payload || (!payload.id && !req.body.id)) {
+        return res.status(400).json({ error: 'Invalid greeting payload' });
       }
+
+      const cardId = payload.id || req.body.id || `card-${Date.now().toString(36)}`;
+      payload.id = cardId;
 
       // Check Authentication or resolve creator session
       const authHeader = req.headers.authorization || '';
       const token = authHeader.replace('Bearer ', '').trim() || (req.query.token as string);
       let user = token ? tokensStore.get(token) : null;
 
-      const creatorEmail = (pageData.creatorEmail || req.body.creatorEmail || user?.email || 'creator@misha.app').trim().toLowerCase();
-      const creatorName = pageData.creatorName || req.body.creatorName || user?.name || pageData.hero?.senderName || 'Creator';
+      const creatorEmail = (payload.creatorEmail || req.body.creatorEmail || user?.email || 'creator@misha.app').trim().toLowerCase();
+      const creatorName = payload.creatorName || req.body.creatorName || user?.name || payload.hero?.senderName || 'Creator';
 
       if (!user) {
         if (usersStore.has(creatorEmail)) {
@@ -992,15 +1152,36 @@ async function startServer() {
         }
       }
 
+      // 1. Deeply sanitize and store all media files (Photos, Audio, Voice notes) permanently on disk
+      const sanitizedProject = deepSanitizeMedia(payload);
+
+      // 2. Generate or reuse unique short ID (e.g. X7kP92)
+      let shortId = sanitizedProject.short_id || sanitizedProject.shortId || greetingsStore.get(cardId)?.short_id;
+      if (!shortId || typeof shortId !== 'string' || shortId.length > 12) {
+        shortId = generateShortId();
+      }
+      sanitizedProject.short_id = shortId;
+      sanitizedProject.shortId = shortId;
+
       const now = new Date();
-      const createdAt = pageData.createdAt || now.toISOString();
+      const createdAt = sanitizedProject.createdAt || now.toISOString();
       const expiresAt =
-        pageData.expiresAt ||
+        sanitizedProject.expiresAt ||
         new Date(now.getTime() + FIFTEEN_DAYS_MS).toISOString();
-      const chatKey = (pageData.chatKey || generateChatKey()).trim().toUpperCase();
+      const chatKey = (sanitizedProject.chatKey || generateChatKey()).trim().toUpperCase();
+      sanitizedProject.chatKey = chatKey;
+
+      const title =
+        sanitizedProject.hero?.mainTitle ||
+        sanitizedProject.hero?.title ||
+        sanitizedProject.title ||
+        'A Special Greeting';
 
       const fullPageData = {
-        ...pageData,
+        ...sanitizedProject,
+        id: cardId,
+        short_id: shortId,
+        shortId: shortId,
         creatorId: user.id,
         creatorEmail: user.email,
         creatorName: user.name,
@@ -1010,13 +1191,32 @@ async function startServer() {
         savedAt: now.toISOString(),
       };
 
-      // Save to private page store (isolated per card ID)
-      pagesStore.set(pageData.id, fullPageData);
+      const record: GreetingRecord = {
+        id: cardId,
+        short_id: shortId,
+        owner_id: user.id,
+        title,
+        project_json: fullPageData,
+        status: 'published',
+        visibility: 'public',
+        created_at: createdAt,
+        updated_at: now.toISOString(),
+        expires_at: expiresAt,
+        view_count: greetingsStore.get(cardId)?.view_count || 0,
+        chatKey,
+        creatorName: user.name,
+        creatorEmail: user.email,
+      };
 
-      // Initialize or update chat room (starts empty with no dummy messages)
-      const existingChat = chatStore.get(pageData.id);
+      // Save to database stores & indices
+      greetingsStore.set(cardId, record);
+      shortIdIndex.set(shortId, cardId);
+      pagesStore.set(cardId, fullPageData);
+
+      // Initialize or update secret chat room
+      const existingChat = chatStore.get(cardId);
       if (!existingChat) {
-        chatStore.set(pageData.id, {
+        chatStore.set(cardId, {
           chatKey,
           messages: [],
           createdAt,
@@ -1027,65 +1227,112 @@ async function startServer() {
         existingChat.expiresAt = expiresAt;
       }
 
-      // Persist to disk immediately
+      // Persist all stores to disk immediately
       saveStoreToDisk();
 
       const origin = req.headers.origin || `http://${req.headers.host}`;
-      const publishedUrl = `${origin}/?p=${pageData.id}`;
-      const directChatUrl = `${origin}/?p=${pageData.id}&chat=1&key=${chatKey}`;
+      const publishedUrl = `${origin}/g/${shortId}`;
+      const directChatUrl = `${origin}/g/${shortId}?chat=1&key=${chatKey}`;
 
       return res.json({
         success: true,
-        id: pageData.id,
-        chatKey,
+        id: cardId,
+        short_id: shortId,
+        shortId: shortId,
         url: publishedUrl,
         directChatUrl,
+        title: record.title,
+        chatKey,
+        createdAt,
         expiresAt,
+        expires_at: expiresAt,
+        view_count: record.view_count,
+        greeting: record,
+        project_json: fullPageData,
       });
     } catch (err: any) {
-      console.error('Error saving page:', err);
-      return res.status(500).json({ error: 'Failed to save page' });
+      console.error('Error publishing greeting:', err);
+      return res.status(500).json({ error: 'Failed to publish greeting' });
     }
-  });
+  }
 
-  // API 3: Get page by ID (strictly isolated to requested card ID)
-  app.get('/api/pages/:id', (req, res) => {
-    const { id } = req.params;
-    cleanupExpiredData(); // Lazy cleanup check
+  // API 2: Publish Greeting endpoints (Server-backed publishing)
+  app.post('/api/greetings/publish', (req, res) => handleGreetingPublish(req, res));
+  app.post('/api/pages', (req, res) => handleGreetingPublish(req, res));
 
-    const page = pagesStore.get(id);
-    if (!page) {
-      return res.status(404).json({ error: 'Page not found or expired' });
+  // Reusable Greeting Retrieval Logic (Look up by short_id or card_id)
+  function handleGreetingGet(req: express.Request, res: express.Response) {
+    const rawParam = req.params.shortId || req.params.id;
+    cleanupExpiredData();
+
+    const cardId = resolveCardId(rawParam);
+    const greeting = greetingsStore.get(cardId);
+    const page = pagesStore.get(cardId) || greeting?.project_json;
+
+    if (!page && !greeting) {
+      return res.status(404).json({ error: 'Greeting not found or expired' });
     }
 
-    // Check if expired
-    if (page.expiresAt && Date.now() > new Date(page.expiresAt).getTime()) {
-      pagesStore.delete(id);
-      reactionsStore.delete(id);
-      chatStore.delete(id);
+    const expiresAt = greeting?.expires_at || page?.expiresAt;
+    if (expiresAt && Date.now() > new Date(expiresAt).getTime()) {
+      if (greeting && greeting.short_id) {
+        shortIdIndex.delete(greeting.short_id);
+      }
+      greetingsStore.delete(cardId);
+      pagesStore.delete(cardId);
+      reactionsStore.delete(cardId);
+      chatStore.delete(cardId);
       saveStoreToDisk();
-      return res.status(404).json({ error: 'Page has expired (15-day privacy TTL)' });
+      return res.status(404).json({ error: 'Greeting has expired (15-day TTL)' });
     }
+
+    // Increment view count
+    if (greeting) {
+      greeting.view_count = (greeting.view_count || 0) + 1;
+      saveStoreToDisk();
+    }
+
+    const projectData = greeting?.project_json || page;
+    const shortId = greeting?.short_id || projectData?.short_id || rawParam;
 
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-    return res.json(page);
-  });
+    return res.json({
+      success: true,
+      id: cardId,
+      short_id: shortId,
+      shortId: shortId,
+      title: greeting?.title || projectData?.title || 'A Special Greeting',
+      view_count: greeting?.view_count || 1,
+      created_at: greeting?.created_at || projectData?.createdAt,
+      expires_at: greeting?.expires_at || projectData?.expiresAt,
+      status: greeting?.status || 'published',
+      visibility: greeting?.visibility || 'public',
+      chatKey: greeting?.chatKey || projectData?.chatKey,
+      project_json: projectData,
+      ...projectData,
+    });
+  }
+
+  // API 3: Get Greeting by Short ID or Canonical ID
+  app.get('/api/g/:shortId', (req, res) => handleGreetingGet(req, res));
+  app.get('/api/greetings/:shortId', (req, res) => handleGreetingGet(req, res));
+  app.get('/api/pages/:id', (req, res) => handleGreetingGet(req, res));
 
   // API 4: Record receiver reaction
   app.post('/api/pages/:id/reaction', (req, res) => {
-    const { id } = req.params;
+    const cardId = resolveCardId(req.params.id);
     const { reaction, customNote } = req.body;
 
-    const existing = reactionsStore.get(id) || [];
+    const existing = reactionsStore.get(cardId) || [];
     existing.push({
       reaction,
       customNote,
       timestamp: new Date().toISOString(),
     });
-    reactionsStore.set(id, existing);
+    reactionsStore.set(cardId, existing);
 
     // Also optionally post reaction into secret chat room
-    const chat = chatStore.get(id);
+    const chat = chatStore.get(cardId);
     if (chat) {
       chat.messages.push({
         id: `react-${Date.now()}`,
@@ -1104,12 +1351,12 @@ async function startServer() {
 
   // API 4.1: Secret Chat Key Verification
   app.post('/api/chat/:id/auth', (req, res) => {
-    const { id } = req.params;
+    const cardId = resolveCardId(req.params.id);
     const { chatKey } = req.body;
     cleanupExpiredData();
 
-    const page = pagesStore.get(id);
-    const chat = chatStore.get(id);
+    const page = pagesStore.get(cardId) || greetingsStore.get(cardId)?.project_json;
+    const chat = chatStore.get(cardId);
     const correctKey = (page?.chatKey || chat?.chatKey || '').trim().toUpperCase();
 
     if (!correctKey) {
@@ -1128,7 +1375,7 @@ async function startServer() {
     return res.json({
       success: true,
       verified: true,
-      cardId: id,
+      cardId,
       chatKey: correctKey,
       senderName: page?.hero?.senderName || 'Sender',
       receiverName: page?.hero?.receiverName || page?.hero?.receiverNickname || 'Receiver',
@@ -1139,7 +1386,7 @@ async function startServer() {
 
   // API 4.2: Get Secret Chat Messages (Protected by Key)
   app.get('/api/chat/:id/messages', (req, res) => {
-    const { id } = req.params;
+    const cardId = resolveCardId(req.params.id);
     const queryKey = (
       (req.query.key as string) ||
       (req.headers['x-chat-key'] as string) ||
@@ -1148,8 +1395,8 @@ async function startServer() {
 
     cleanupExpiredData();
 
-    const page = pagesStore.get(id);
-    const chat = chatStore.get(id);
+    const page = pagesStore.get(cardId) || greetingsStore.get(cardId)?.project_json;
+    const chat = chatStore.get(cardId);
     const correctKey = (page?.chatKey || chat?.chatKey || '').trim().toUpperCase();
 
     if (!correctKey) {
@@ -1170,7 +1417,7 @@ async function startServer() {
 
   // API 4.3: Send Secret Chat Message (Protected by Key)
   app.post('/api/chat/:id/messages', (req, res) => {
-    const { id } = req.params;
+    const cardId = resolveCardId(req.params.id);
     const {
       chatKey = '',
       sender = 'creator',
@@ -1183,8 +1430,8 @@ async function startServer() {
       duration,
     } = req.body;
 
-    const page = pagesStore.get(id);
-    let chat = chatStore.get(id);
+    const page = pagesStore.get(cardId) || greetingsStore.get(cardId)?.project_json;
+    let chat = chatStore.get(cardId);
     const correctKey = (page?.chatKey || chat?.chatKey || '').trim().toUpperCase();
 
     const providedKey = (chatKey || '').trim().toUpperCase();
@@ -1201,7 +1448,13 @@ async function startServer() {
         createdAt: now.toISOString(),
         expiresAt: new Date(now.getTime() + FIFTEEN_DAYS_MS).toISOString(),
       };
-      chatStore.set(id, chat);
+      chatStore.set(cardId, chat);
+    }
+
+    // If mediaUrl is base64, save to persistent storage
+    let persistentMediaUrl = mediaUrl;
+    if (mediaUrl && typeof mediaUrl === 'string' && mediaUrl.startsWith('data:')) {
+      persistentMediaUrl = saveBase64ToUploads(mediaUrl);
     }
 
     const newMsg = {
@@ -1209,8 +1462,8 @@ async function startServer() {
       sender,
       senderName,
       deviceId: deviceId || undefined,
-      text: text.trim(),
-      mediaUrl,
+      text: (text || '').trim(),
+      mediaUrl: persistentMediaUrl,
       reaction,
       isVoiceNote: !!isVoiceNote,
       duration,
@@ -1229,11 +1482,11 @@ async function startServer() {
 
   // API 4.4: React to a Chat Message (Protected by Key)
   app.post('/api/chat/:id/react', (req, res) => {
-    const { id } = req.params;
+    const cardId = resolveCardId(req.params.id);
     const { chatKey = '', messageId, reaction } = req.body;
 
-    const page = pagesStore.get(id);
-    const chat = chatStore.get(id);
+    const page = pagesStore.get(cardId) || greetingsStore.get(cardId)?.project_json;
+    const chat = chatStore.get(cardId);
     const correctKey = (page?.chatKey || chat?.chatKey || '').trim().toUpperCase();
 
     if (correctKey && chatKey.trim().toUpperCase() !== correctKey) {
@@ -1244,6 +1497,7 @@ async function startServer() {
       const msg = chat.messages.find((m) => m.id === messageId);
       if (msg) {
         msg.reaction = reaction;
+        saveStoreToDisk();
         return res.json({ success: true, message: msg });
       }
     }
@@ -1253,11 +1507,11 @@ async function startServer() {
 
   // API 4.5: Ephemeral Chat Wipe / Clear on Exit (No persistent storage)
   app.post('/api/chat/:id/clear', (req, res) => {
-    const { id } = req.params;
+    const cardId = resolveCardId(req.params.id);
     const { chatKey = '' } = req.body;
 
-    const page = pagesStore.get(id);
-    const chat = chatStore.get(id);
+    const page = pagesStore.get(cardId) || greetingsStore.get(cardId)?.project_json;
+    const chat = chatStore.get(cardId);
     const correctKey = (page?.chatKey || chat?.chatKey || '').trim().toUpperCase();
     const cleanKey = (chatKey || '').trim().toUpperCase();
 
@@ -1268,19 +1522,19 @@ async function startServer() {
     if (chat) {
       chat.messages = [];
     }
-    chatStore.delete(id);
+    chatStore.delete(cardId);
     saveStoreToDisk();
 
     return res.json({ success: true, message: 'Chat room messages wiped clean' });
   });
 
   app.delete('/api/chat/:id/messages', (req, res) => {
-    const { id } = req.params;
-    const chat = chatStore.get(id);
+    const cardId = resolveCardId(req.params.id);
+    const chat = chatStore.get(cardId);
     if (chat) {
       chat.messages = [];
     }
-    chatStore.delete(id);
+    chatStore.delete(cardId);
     saveStoreToDisk();
     return res.json({ success: true, message: 'Chat room deleted' });
   });
@@ -1445,12 +1699,27 @@ Output must be a valid JSON object strictly adhering to this structure:
 
 Return ONLY pure valid JSON without markdown wrapping or code blocks.`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
-        contents: prompt,
-      });
+      let rawText = '';
+      try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.6-flash',
+          contents: prompt,
+        });
+        rawText = (response.text || '').trim();
+      } catch (firstErr) {
+        console.warn('gemini-3.6-flash call failed or quota reached, retrying with gemini-3.1-flash-lite:', firstErr);
+        try {
+          const fallbackResp = await ai.models.generateContent({
+            model: 'gemini-3.1-flash-lite',
+            contents: prompt,
+          });
+          rawText = (fallbackResp.text || '').trim();
+        } catch (secondErr) {
+          console.warn('Gemini secondary model also unavailable, utilizing instant localized fallback generator:', secondErr);
+          throw secondErr;
+        }
+      }
 
-      const rawText = (response.text || '').trim();
       let cleanJson = rawText;
       if (cleanJson.startsWith('```json')) {
         cleanJson = cleanJson.replace(/^```json\s*/i, '').replace(/\s*```$/, '');
@@ -1590,12 +1859,27 @@ Instructions:
 4. Format into clean paragraphs separated by double linebreaks.
 5. End with a sweet sign-off line from ${senderName} (with appropriate emoji like 💍🌹 for proposal, 🌹 for romance, 🎂 for birthday).`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
-        contents: prompt,
-      });
+      let text = '';
+      try {
+        const response = await ai.models.generateContent({
+          model: 'gemini-3.6-flash',
+          contents: prompt,
+        });
+        text = response.text || '';
+      } catch (firstErr) {
+        console.warn('gemini-3.6-flash write failed or quota reached, retrying with gemini-3.1-flash-lite:', firstErr);
+        try {
+          const fallbackResp = await ai.models.generateContent({
+            model: 'gemini-3.1-flash-lite',
+            contents: prompt,
+          });
+          text = fallbackResp.text || '';
+        } catch (secondErr) {
+          console.warn('Gemini secondary write model also unavailable, using localized template fallback:', secondErr);
+          throw secondErr;
+        }
+      }
 
-      const text = response.text || '';
       return res.json({ text: text.trim() });
     } catch (err: any) {
       console.error('Gemini AI write error:', err);

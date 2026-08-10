@@ -63,9 +63,10 @@ export const ReceiverExperience: React.FC<ReceiverExperienceProps> = ({
     }
   };
 
-  // Build current clean short shareable link
+  // Build current guaranteed shareable link
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
-  const shareableUrl = `${origin}/?p=${data.id}`;
+  const hashData = encodePageDataToHash(data);
+  const shareableUrl = `${origin}/?p=${data.id}#d=${hashData}`;
 
   // If full-page WhatsApp chat is open, render SecretChatView directly
   if (isChatOpen) {

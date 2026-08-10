@@ -201,6 +201,23 @@ export const MusicStudioSection: React.FC<MusicStudioSectionProps> = ({
     musicEngine.stop(); // YouTube plays directly in its own player
   };
 
+  const uploadAudioToServer = async (dataUrl: string, filename?: string): Promise<string> => {
+    try {
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataUrl, filename }),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.url) return json.url;
+      }
+    } catch (e) {
+      console.warn('Audio upload to server failed, using local audio data:', e);
+    }
+    return dataUrl;
+  };
+
   // Handle custom audio file upload (.mp3, .wav, .m4a, .aac, .ogg)
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -215,17 +232,18 @@ export const MusicStudioSection: React.FC<MusicStudioSectionProps> = ({
     }
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const dataUrl = event.target?.result as string;
       const cleanName = file.name.replace(/\.[^/.]+$/, '');
+      const serverUrl = await uploadAudioToServer(dataUrl, file.name);
       onChange({
         musicTrack: 'custom-url',
-        customMusicUrl: dataUrl,
+        customMusicUrl: serverUrl,
         customMusicName: cleanName,
       });
 
       // Start playing preview
-      togglePreview('custom-url', dataUrl);
+      togglePreview('custom-url', serverUrl);
     };
     reader.onerror = () => {
       setUploadError('Failed to read audio file. Please try a different format.');
@@ -273,14 +291,15 @@ export const MusicStudioSection: React.FC<MusicStudioSectionProps> = ({
       mediaRecorder.onstop = () => {
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         const reader = new FileReader();
-        reader.onloadend = () => {
+        reader.onloadend = async () => {
           const base64Audio = reader.result as string;
+          const serverUrl = await uploadAudioToServer(base64Audio, `voice-note-${Date.now()}.webm`);
           onChange({
             musicTrack: 'custom-url',
-            customMusicUrl: base64Audio,
+            customMusicUrl: serverUrl,
             customMusicName: 'My Romantic Voice Note 🎙️',
           });
-          togglePreview('custom-url', base64Audio);
+          togglePreview('custom-url', serverUrl);
         };
         reader.readAsDataURL(audioBlob);
 
