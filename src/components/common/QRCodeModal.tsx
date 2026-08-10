@@ -55,8 +55,8 @@ export const QRCodeModal: React.FC<QRCodeModalProps> = ({
 
     const generateQR = async () => {
       const origin = typeof window !== 'undefined' ? window.location.origin : '';
-      const cleanShortUrl = url ? (url.includes('#') ? url.split('#')[0] : url) : `${origin}/?p=${data.id}&v=r`;
-      const effectiveQrUrl = url || cleanShortUrl;
+      const cleanShortUrl = url ? (url.includes('#') ? url.split('#')[0] : url) : `${origin}/?p=${data.id}`;
+      const effectiveQrUrl = cleanShortUrl;
 
       // 1. Try rendering directly to HTML5 Canvas
       if (canvasRef.current) {

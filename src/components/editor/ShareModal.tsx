@@ -48,21 +48,24 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const [showQr, setShowQr] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
 
-  // Build the clean receiver URL with indestructible hash backup
+  // Build the clean receiver URL
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const hashData = encodePageDataToHash(data);
 
-  // High-reliability resilient link (Instant 0ms client hydration + server sync)
-  const resilientLink = `${origin}/?p=${data.id}#data=${hashData}`;
-  const shortLink = `${origin}/?p=${data.id}`;
-  const finalLink = publishedUrl
-    ? (publishedUrl.includes('#') ? publishedUrl : `${publishedUrl}#data=${hashData}`)
-    : resilientLink;
+  // Clean canonical short link (e.g. https://domain/?p=card-xyz)
+  const shortLink = publishedUrl
+    ? (publishedUrl.includes('#') ? publishedUrl.split('#')[0] : publishedUrl)
+    : `${origin}/?p=${data.id}`;
+
+  const finalLink = shortLink;
+  const resilientOfflineLink = `${shortLink}#data=${hashData}`;
 
   const receiverDisplayName = (data.hero.receiverNickname || data.hero.receiverName || 'Your Partner').trim();
-
   const chatKey = (data.chatKey || 'LOVE-9999').trim().toUpperCase();
-  const directChatLink = `${origin}/?p=${data.id}&chat=1&key=${chatKey}#data=${hashData}`;
+  const directChatLink = `${shortLink}${shortLink.includes('?') ? '&' : '?'}chat=1&key=${chatKey}`;
+
+  const [copiedOfflineLink, setCopiedOfflineLink] = useState(false);
+  const [showAdvancedLink, setShowAdvancedLink] = useState(false);
 
   useEffect(() => {
     if (isOpen && finalLink) {
@@ -104,6 +107,12 @@ export const ShareModal: React.FC<ShareModalProps> = ({
     navigator.clipboard.writeText(directChatLink);
     setCopiedChatLink(true);
     setTimeout(() => setCopiedChatLink(false), 2500);
+  };
+
+  const handleCopyOfflineLink = () => {
+    navigator.clipboard.writeText(resilientOfflineLink);
+    setCopiedOfflineLink(true);
+    setTimeout(() => setCopiedOfflineLink(false), 2500);
   };
 
   const handleDownloadQr = () => {
@@ -356,6 +365,45 @@ export const ShareModal: React.FC<ShareModalProps> = ({
               </p>
             </motion.div>
           )}
+
+          {/* Advanced / Offline Resilient Link Toggle */}
+          <div className="pt-1">
+            <button
+              type="button"
+              onClick={() => setShowAdvancedLink(!showAdvancedLink)}
+              className="text-[11px] text-stone-400 hover:text-stone-300 flex items-center gap-1.5 transition-colors cursor-pointer"
+            >
+              <span>{showAdvancedLink ? '▾ Hide Offline Self-Contained Link' : '▸ Need 100% Offline Link? (Advanced)'}</span>
+            </button>
+
+            {showAdvancedLink && (
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: 'auto' }}
+                className="mt-2 p-3 rounded-xl bg-black/40 border border-white/10 space-y-2"
+              >
+                <div className="flex items-center justify-between text-[11px] text-stone-300">
+                  <span className="font-semibold">Self-Contained Offline Link</span>
+                  <span className="text-[10px] text-stone-500">Includes embedded card data</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value={resilientOfflineLink}
+                    className="flex-1 bg-black/60 px-2 py-1.5 rounded-lg text-[10px] text-stone-400 font-mono focus:outline-none truncate"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleCopyOfflineLink}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold text-stone-200 bg-white/10 hover:bg-white/20 transition-all shrink-0 cursor-pointer"
+                  >
+                    {copiedOfflineLink ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </div>
 
           {/* 15-Day Auto-Destruct Privacy Highlight */}
           <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-stone-300 text-xs flex items-center gap-2">

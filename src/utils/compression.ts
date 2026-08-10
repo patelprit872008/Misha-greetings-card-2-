@@ -3,32 +3,33 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import LZString from 'lz-string';
 import { HeartPageData } from '../types';
 import { TEMPLATE_PRESETS } from '../data/templates';
 
 const STORAGE_PREFIX = 'heartpage_draft_';
 const RECENT_PAGES_KEY = 'heartpage_recent_ids';
 
+/**
+ * Encodes page data into a compact URL-safe hash string using LZ compression.
+ */
 export function encodePageDataToHash(data: HeartPageData): string {
   try {
     const jsonStr = JSON.stringify(data);
-    const utf8Bytes = new TextEncoder().encode(jsonStr);
-    let binary = '';
-    for (let i = 0; i < utf8Bytes.length; i++) {
-      binary += String.fromCharCode(utf8Bytes[i]);
-    }
-    const base64 = btoa(binary);
-    return encodeURIComponent(base64);
+    const compressed = LZString.compressToEncodedURIComponent(jsonStr);
+    return compressed || '';
   } catch (err) {
     console.error('Failed to encode page data', err);
     return '';
   }
 }
 
+/**
+ * Decodes page data from hash, supporting LZ-compressed, raw base64, and URL-encoded formats.
+ */
 export function decodePageDataFromHash(encoded: string): HeartPageData | null {
   try {
     if (!encoded) return null;
-    // Strip leading hash '#', query markers, or whitespace
     let clean = encoded.trim();
     if (clean.startsWith('#')) {
       clean = clean.substring(1).trim();
@@ -43,23 +44,38 @@ export function decodePageDataFromHash(encoded: string): HeartPageData | null {
       }
     }
 
-    let base64 = clean;
+    // 1. Try LZString decompression first
     try {
-      base64 = decodeURIComponent(clean);
-    } catch (e) {
-      base64 = clean;
-    }
+      const lzDecompressed = LZString.decompressFromEncodedURIComponent(clean);
+      if (lzDecompressed) {
+        const parsed = JSON.parse(lzDecompressed) as HeartPageData;
+        if (parsed && typeof parsed === 'object' && (parsed.hero || parsed.id)) {
+          return parsed;
+        }
+      }
+    } catch (e) {}
 
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    const jsonStr = new TextDecoder().decode(bytes);
-    const parsed = JSON.parse(jsonStr) as HeartPageData;
-    if (parsed && typeof parsed === 'object' && (parsed.hero || parsed.id)) {
-      return parsed;
-    }
+    // 2. Try legacy Base64 decoding
+    try {
+      let base64 = clean;
+      try {
+        base64 = decodeURIComponent(clean);
+      } catch (e) {
+        base64 = clean;
+      }
+
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const jsonStr = new TextDecoder().decode(bytes);
+      const parsed = JSON.parse(jsonStr) as HeartPageData;
+      if (parsed && typeof parsed === 'object' && (parsed.hero || parsed.id)) {
+        return parsed;
+      }
+    } catch (e) {}
+
     return null;
   } catch (err) {
     console.warn('Failed to decode page data from hash:', err);

@@ -304,12 +304,11 @@ function MainApp() {
     setPageData(fresh);
   };
 
-  // Save to Server endpoint (Permanent 15-day server link with Authentication requirement & Resilient Hash)
+  // Save to Server endpoint (Permanent server link with disk persistence & clean short URL)
   const handleSaveToServer = async (dataToSave?: HeartPageData): Promise<string | undefined> => {
     const payload = dataToSave || pageData;
     const origin = typeof window !== 'undefined' ? window.location.origin : '';
-    const hashData = encodePageDataToHash(payload);
-    const resilientUrl = `${origin}/?p=${payload.id}#data=${hashData}`;
+    const cleanShortUrl = `${origin}/?p=${payload.id}`;
 
     // Cache locally immediately so link works offline & instantly
     try {
@@ -354,15 +353,15 @@ function MainApp() {
         if (contentType.includes('application/json')) {
           const result = await res.json();
           if (result && result.url) {
-            return `${result.url}#data=${hashData}`;
+            return result.url;
           }
         }
       }
     } catch (err) {
-      console.warn('Save to server API call failed, using resilient URL fallback:', err);
+      console.warn('Save to server API call failed, using local short URL fallback:', err);
     }
 
-    return resilientUrl;
+    return cleanShortUrl;
   };
 
   // Handle reaction from receiver
