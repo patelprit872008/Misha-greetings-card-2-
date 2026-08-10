@@ -76,12 +76,15 @@ export const AudioPlayerFloat: React.FC<AudioPlayerFloatProps> = ({
       musicEngine.stop();
       if (autoPlay) {
         setIsPlaying(true);
-        // Trigger play on youtube
-        setTimeout(() => {
+        // Trigger play on youtube with progressive retries
+        const attemptPlay = () => {
           sendYouTubeCommand('playVideo');
           sendYouTubeCommand('unMute');
           sendYouTubeCommand('setVolume', [volume]);
-        }, 800);
+        };
+        setTimeout(attemptPlay, 300);
+        setTimeout(attemptPlay, 1000);
+        setTimeout(attemptPlay, 2000);
       }
     } else {
       if (autoPlay) {
@@ -90,7 +93,23 @@ export const AudioPlayerFloat: React.FC<AudioPlayerFloatProps> = ({
       }
     }
 
+    // Auto-unlock & start YouTube audio on first user touch/tap anywhere on page
+    const handleFirstGesture = () => {
+      unlockAudio();
+      if (isYouTube && autoPlay) {
+        sendYouTubeCommand('playVideo');
+        sendYouTubeCommand('unMute');
+        sendYouTubeCommand('setVolume', [volume]);
+        setIsPlaying(true);
+      }
+    };
+
+    window.addEventListener('click', handleFirstGesture, { once: true });
+    window.addEventListener('touchstart', handleFirstGesture, { once: true });
+
     return () => {
+      window.removeEventListener('click', handleFirstGesture);
+      window.removeEventListener('touchstart', handleFirstGesture);
       musicEngine.stop();
       if (isYouTube) {
         sendYouTubeCommand('pauseVideo');
@@ -212,26 +231,26 @@ export const AudioPlayerFloat: React.FC<AudioPlayerFloatProps> = ({
       id="floating-audio-widget"
       className="fixed bottom-5 right-5 z-40 flex flex-col items-end gap-2"
     >
-      {/* Hidden YouTube background audio iframe */}
+      {/* Active YouTube background audio iframe */}
       {isYouTube && youtubeVideoId && (
-        <div className="w-0 h-0 overflow-hidden opacity-0 pointer-events-none absolute -top-9999 -left-9999">
+        <div className="fixed bottom-0 right-0 w-1 h-1 opacity-0 pointer-events-none z-[-1] overflow-hidden">
           <iframe
             ref={youtubeIframeRef}
             id="youtube-audio-stream"
-            src={`https://www.youtube-nocookie.com/embed/${youtubeVideoId}?enablejsapi=1&autoplay=1&loop=1&playlist=${youtubeVideoId}&controls=0&playsinline=1&origin=${encodeURIComponent(
+            src={`https://www.youtube.com/embed/${youtubeVideoId}?enablejsapi=1&autoplay=1&loop=1&playlist=${youtubeVideoId}&controls=0&playsinline=1&modestbranding=1&rel=0&origin=${encodeURIComponent(
               typeof window !== 'undefined' ? window.location.origin : ''
             )}`}
             title="YouTube Background Audio"
-            allow="autoplay; encrypted-media"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
             onLoad={() => {
               setIsYoutubeReady(true);
-              if (isPlaying) {
+              if (isPlaying || autoPlay) {
                 sendYouTubeCommand('playVideo');
                 sendYouTubeCommand('unMute');
                 sendYouTubeCommand('setVolume', [volume]);
               }
             }}
-            className="w-1 h-1"
+            className="w-full h-full"
           />
         </div>
       )}

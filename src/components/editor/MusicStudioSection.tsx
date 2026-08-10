@@ -176,7 +176,7 @@ export const MusicStudioSection: React.FC<MusicStudioSectionProps> = ({
   };
 
   // Handle YouTube song submission
-  const handleApplyYouTube = (urlToUse?: string) => {
+  const handleApplyYouTube = (urlToUse?: string, nameToUse?: string) => {
     const raw = (urlToUse || youtubeInput).trim();
     if (!raw) return;
 
@@ -188,7 +188,7 @@ export const MusicStudioSection: React.FC<MusicStudioSectionProps> = ({
     }
 
     const fullUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const friendlyName = `YouTube Song (ID: ${videoId})`;
+    const friendlyName = nameToUse || (raw.includes('youtu') ? `YouTube Song (${videoId})` : `YouTube Song (${videoId})`);
 
     onChange({
       musicTrack: 'custom-url',
@@ -543,7 +543,7 @@ export const MusicStudioSection: React.FC<MusicStudioSectionProps> = ({
                 <button
                   key={i}
                   type="button"
-                  onClick={() => handleApplyYouTube(sug.url)}
+                  onClick={() => handleApplyYouTube(sug.url, sug.name)}
                   className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-stone-800/90 hover:bg-red-900/40 text-stone-300 hover:text-white border border-white/10 hover:border-red-500/40 transition-colors"
                 >
                   {sug.name}

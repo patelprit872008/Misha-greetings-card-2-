@@ -71,16 +71,42 @@ if (typeof window !== 'undefined') {
 export function extractYouTubeVideoId(url?: string): string | null {
   if (!url) return null;
   const trimmed = url.trim();
-  // Match standard, youtu.be, shorts, embed, music.youtube URLs
-  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=|shorts\/|live\/)([^#&?]*).*/;
-  const match = trimmed.match(regExp);
-  if (match && match[2] && match[2].length === 11) {
-    return match[2];
-  }
+
   // Direct 11-char ID
   if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
     return trimmed;
   }
+
+  try {
+    const fullUrlStr = trimmed.startsWith('http') ? trimmed : `https://${trimmed}`;
+    const parsed = new URL(fullUrlStr);
+
+    // Standard youtube.com URLs
+    if (parsed.hostname.includes('youtube.com') || parsed.hostname.includes('youtube-nocookie.com')) {
+      const v = parsed.searchParams.get('v');
+      if (v && v.length === 11) return v;
+
+      const pathSegments = parsed.pathname.split('/').filter(Boolean);
+      if (pathSegments[0] === 'shorts' || pathSegments[0] === 'embed' || pathSegments[0] === 'v' || pathSegments[0] === 'live') {
+        const candidate = pathSegments[1] ? pathSegments[1].substring(0, 11) : null;
+        if (candidate && candidate.length === 11) return candidate;
+      }
+    }
+
+    // youtu.be short links
+    if (parsed.hostname.includes('youtu.be')) {
+      const candidate = parsed.pathname.replace(/^\//, '').split(/[?#&]/)[0];
+      if (candidate && candidate.length === 11) return candidate;
+    }
+  } catch (e) {}
+
+  // Robust Regex Fallback
+  const regExp = /(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/|live\/))([a-zA-Z0-9_-]{11})/;
+  const match = trimmed.match(regExp);
+  if (match && match[1] && match[1].length === 11) {
+    return match[1];
+  }
+
   return null;
 }
 

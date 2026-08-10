@@ -48,16 +48,21 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const [showQr, setShowQr] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
 
-  // Build the clean short receiver URL
+  // Build the clean receiver URL with indestructible hash backup
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const hashData = encodePageDataToHash(data);
 
-  // Clean, short URL (e.g. https://domain.app/?p=card-12345)
-  const finalLink = `${origin}/?p=${data.id}`;
+  // High-reliability resilient link (Instant 0ms client hydration + server sync)
+  const resilientLink = `${origin}/?p=${data.id}#data=${hashData}`;
+  const shortLink = `${origin}/?p=${data.id}`;
+  const finalLink = publishedUrl
+    ? (publishedUrl.includes('#') ? publishedUrl : `${publishedUrl}#data=${hashData}`)
+    : resilientLink;
 
   const receiverDisplayName = (data.hero.receiverNickname || data.hero.receiverName || 'Your Partner').trim();
 
   const chatKey = (data.chatKey || 'LOVE-9999').trim().toUpperCase();
-  const directChatLink = `${origin}/?p=${data.id}&chat=1&key=${chatKey}`;
+  const directChatLink = `${origin}/?p=${data.id}&chat=1&key=${chatKey}#data=${hashData}`;
 
   useEffect(() => {
     if (isOpen && finalLink) {
