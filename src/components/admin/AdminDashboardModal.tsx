@@ -365,8 +365,36 @@ export const AdminDashboardModal: React.FC = () => {
                   className="p-3.5 rounded-2xl bg-black/40 border border-white/10 hover:border-amber-400/40 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 group"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-stone-800 border border-white/15 flex items-center justify-center text-lg shrink-0">
-                      {usr.avatar || (usr.role === 'admin' ? '👑' : '💌')}
+                    <div className="relative shrink-0">
+                      <div
+                        className={`w-10 h-10 rounded-2xl flex items-center justify-center text-lg overflow-hidden ${
+                          usr.role === 'admin'
+                            ? 'bg-amber-950/60 border-2 border-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.3)] ring-1 ring-amber-400/50'
+                            : 'bg-stone-800 border border-white/15'
+                        }`}
+                      >
+                        {usr.avatar &&
+                        (usr.avatar.startsWith('http://') ||
+                          usr.avatar.startsWith('https://') ||
+                          usr.avatar.startsWith('data:')) ? (
+                          <img
+                            src={usr.avatar}
+                            alt={usr.name || 'User'}
+                            className="w-full h-full object-cover rounded-2xl"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <span>{usr.avatar || (usr.role === 'admin' ? '👑' : '💌')}</span>
+                        )}
+                      </div>
+                      {usr.role === 'admin' && (
+                        <div
+                          className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-gradient-to-tr from-amber-500 to-yellow-300 text-stone-950 flex items-center justify-center shadow-md border border-stone-950 z-10"
+                          title="Master Admin VIP"
+                        >
+                          <Crown size={9} className="fill-current text-stone-950 stroke-[2.5]" />
+                        </div>
+                      )}
                     </div>
                     <div>
                       <div className="flex items-center gap-2 flex-wrap">

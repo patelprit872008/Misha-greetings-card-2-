@@ -5,7 +5,7 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { LogOut, Heart, Sparkles, X, Shield, ArrowRight, Loader2 } from 'lucide-react';
+import { LogOut, Heart, Sparkles, X, Shield, ArrowRight, Loader2, Crown } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import logoutBgImage from '../../assets/images/logout_romantic_bg_1786267834119.jpg';
 
@@ -90,8 +90,43 @@ export const LogoutConfirmModal: React.FC<LogoutConfirmModalProps> = ({
           {/* User Info Chip */}
           {user && (
             <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-white/5 border border-white/10 mb-4">
-              <span className="text-sm">{user.avatar || '✨'}</span>
+              <div className="relative shrink-0">
+                <div
+                  className={`w-6 h-6 rounded-full overflow-hidden flex items-center justify-center text-xs ${
+                    user.role === 'admin'
+                      ? 'border border-amber-400 ring-1 ring-amber-400/40 bg-amber-950/60'
+                      : 'border border-white/20 bg-stone-700'
+                  }`}
+                >
+                  {user.avatar &&
+                  (user.avatar.startsWith('http://') ||
+                    user.avatar.startsWith('https://') ||
+                    user.avatar.startsWith('data:')) ? (
+                    <img
+                      src={user.avatar}
+                      alt={user.name || 'User'}
+                      className="w-full h-full object-cover rounded-full"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <span>{user.avatar || (user.role === 'admin' ? '👑' : '✨')}</span>
+                  )}
+                </div>
+                {user.role === 'admin' && (
+                  <div
+                    className="absolute -top-1.5 -right-1 w-3.5 h-3.5 rounded-full bg-gradient-to-tr from-amber-500 to-yellow-300 text-stone-950 flex items-center justify-center shadow-md border border-stone-950 z-10"
+                    title="Master Admin VIP"
+                  >
+                    <Crown size={8} className="fill-current text-stone-950 stroke-[2.5]" />
+                  </div>
+                )}
+              </div>
               <span className="text-xs font-semibold text-stone-200">{user.name || user.email}</span>
+              {user.role === 'admin' && (
+                <span className="px-1.5 py-0.2 rounded text-[9px] font-extrabold uppercase bg-amber-400 text-black">
+                  Admin
+                </span>
+              )}
             </div>
           )}
 

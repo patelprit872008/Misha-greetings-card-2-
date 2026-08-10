@@ -432,22 +432,99 @@ export const CreatorStudio: React.FC<CreatorStudioProps> = ({
               <button
                 type="button"
                 onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
-                className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl border border-white/10 bg-stone-800 text-stone-200 hover:bg-stone-700 text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer"
+                className={`p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl border ${
+                  isAdmin
+                    ? 'border-amber-400/40 bg-gradient-to-r from-stone-800 to-amber-950/30 text-amber-200 hover:border-amber-400/60 shadow-[0_0_12px_rgba(245,158,11,0.15)]'
+                    : 'border-white/10 bg-stone-800 text-stone-200 hover:bg-stone-700'
+                } text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer`}
               >
-                <div className="w-6 h-6 rounded-full bg-stone-700 border border-white/20 flex items-center justify-center text-xs">
-                  {user.avatar || '✨'}
+                <div className="relative shrink-0">
+                  <div
+                    className={`w-6 h-6 rounded-full flex items-center justify-center text-xs overflow-hidden shrink-0 ${
+                      isAdmin
+                        ? 'bg-amber-950/70 border border-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.35)] ring-1 ring-amber-400/50'
+                        : 'bg-stone-700 border border-white/20'
+                    }`}
+                  >
+                    {user.avatar &&
+                    (user.avatar.startsWith('http://') ||
+                      user.avatar.startsWith('https://') ||
+                      user.avatar.startsWith('data:')) ? (
+                      <img
+                        src={user.avatar}
+                        alt={user.name || 'User'}
+                        className="w-full h-full object-cover rounded-full"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <span>{user.avatar || (isAdmin ? '👑' : '✨')}</span>
+                    )}
+                  </div>
+                  {isAdmin && (
+                    <div
+                      className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 rounded-full bg-gradient-to-tr from-amber-500 to-yellow-300 text-stone-950 flex items-center justify-center shadow-md border border-stone-950 z-10"
+                      title="Master Admin VIP"
+                    >
+                      <Crown size={8} className="fill-current text-stone-950 stroke-[2.5]" />
+                    </div>
+                  )}
                 </div>
                 <span className="hidden sm:inline max-w-[100px] truncate">
                   {user.name || 'Creator'}
                 </span>
+                {isAdmin && (
+                  <span className="hidden md:inline px-1.5 py-0.5 rounded text-[9px] font-extrabold uppercase bg-amber-400 text-black shadow-xs">
+                    Admin
+                  </span>
+                )}
               </button>
 
               {/* User Dropdown Menu */}
               {isUserMenuOpen && (
-                <div className="absolute right-0 top-full mt-2 w-52 bg-stone-900 border border-white/15 rounded-2xl p-2 shadow-2xl z-50 text-xs space-y-1 animate-in fade-in zoom-in-95">
-                  <div className="px-3 py-2 border-b border-white/10">
-                    <p className="font-bold text-white truncate">{user.name}</p>
-                    <p className="text-[10px] text-stone-400 font-mono truncate">{user.email}</p>
+                <div className="absolute right-0 top-full mt-2 w-60 bg-stone-900 border border-white/15 rounded-2xl p-2 shadow-2xl z-50 text-xs space-y-1 animate-in fade-in zoom-in-95">
+                  <div className="px-3 py-2 border-b border-white/10 flex items-center gap-2.5">
+                    <div className="relative shrink-0">
+                      <div
+                        className={`w-9 h-9 rounded-full flex items-center justify-center text-xs overflow-hidden ${
+                          isAdmin
+                            ? 'bg-amber-950/80 border-2 border-amber-400 shadow-[0_0_12px_rgba(251,191,36,0.4)] ring-2 ring-amber-500/30'
+                            : 'bg-stone-700 border border-white/20'
+                        }`}
+                      >
+                        {user.avatar &&
+                        (user.avatar.startsWith('http://') ||
+                          user.avatar.startsWith('https://') ||
+                          user.avatar.startsWith('data:')) ? (
+                          <img
+                            src={user.avatar}
+                            alt={user.name || 'User'}
+                            className="w-full h-full object-cover rounded-full"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <span>{user.avatar || (isAdmin ? '👑' : '✨')}</span>
+                        )}
+                      </div>
+                      {isAdmin && (
+                        <div
+                          className="absolute -top-2 -right-1 w-4 h-4 rounded-full bg-gradient-to-tr from-amber-500 to-yellow-300 text-stone-950 flex items-center justify-center shadow-lg border border-stone-950 z-10"
+                          title="Master Admin"
+                        >
+                          <Crown size={9} className="fill-current text-stone-950 stroke-[2.5]" />
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <p className="font-bold text-white truncate">{user.name}</p>
+                        {isAdmin && (
+                          <span className="px-1 py-0.2 rounded text-[8px] font-extrabold uppercase bg-amber-400 text-black">
+                            Admin
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-stone-400 font-mono truncate">{user.email}</p>
+                    </div>
                   </div>
 
                   {isAdmin && (

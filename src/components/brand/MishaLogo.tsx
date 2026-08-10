@@ -88,7 +88,7 @@ export const MishaLogo: React.FC<MishaLogoProps> = ({
               Greetings Card
             </span>
           </span>
-          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/30">
+          <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-rose-500/20 text-rose-300 border border-rose-500/30 whitespace-nowrap shrink-0">
             Studio
           </span>
         </div>
