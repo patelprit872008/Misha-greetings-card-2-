@@ -25,6 +25,7 @@ import {
   saveGreeting,
   getGreetingByShortId,
   getGreetingById,
+  getRawGreetingById,
   incrementGreetingViewCount,
   listAllGreetings,
   deleteGreeting,
@@ -1037,12 +1038,15 @@ async function startServer() {
       sanitizedProject.shortId = shortId;
 
       const now = new Date();
-      const createdAt = sanitizedProject.createdAt || now.toISOString();
-      const expiresAt =
-        sanitizedProject.expiresAt ||
-        new Date(new Date(createdAt).getTime() + CARD_RETENTION_MS).toISOString();
+      let createdTime = sanitizedProject.createdAt ? new Date(sanitizedProject.createdAt).getTime() : now.getTime();
+      if (isNaN(createdTime) || (now.getTime() - createdTime) >= CARD_RETENTION_MS) {
+        createdTime = now.getTime();
+      }
+      const createdAt = new Date(createdTime).toISOString();
+      const expiresAt = new Date(createdTime + CARD_RETENTION_MS).toISOString();
       const chatKey = (sanitizedProject.chatKey || generateChatKey()).trim().toUpperCase();
       sanitizedProject.chatKey = chatKey;
+      sanitizedProject.createdAt = createdAt;
       sanitizedProject.expiresAt = expiresAt;
       sanitizedProject.retentionDays = CARD_RETENTION_DAYS;
 
@@ -1126,16 +1130,33 @@ async function startServer() {
 
   // Reusable Greeting Retrieval Logic from Neon PostgreSQL
   async function handleGreetingGet(req: express.Request, res: express.Response) {
-    const rawParam = req.params.shortId || req.params.id;
+    const rawParam = (req.params.shortId || req.params.id || '').trim();
+    if (!rawParam) {
+      return res.status(400).json({ error: 'Missing card identifier', notFound: true, expired: false });
+    }
 
-    const greeting = (await getGreetingByShortId(rawParam)) || (await getGreetingById(rawParam));
+    const rawGreeting = await getRawGreetingById(rawParam);
 
-    if (!greeting) {
-      return res.status(404).json({
-        error: 'Greeting card not found or expired after 30 days retention period.',
+    // If card exists and is expired past 30 days, purge it and return 410 Expired
+    if (rawGreeting && isGreetingExpired(rawGreeting)) {
+      console.log(`⏳ [30-Day Retention] Greeting "${rawGreeting.title || rawGreeting.id}" expired. Purging now.`);
+      deleteGreeting(rawGreeting.id).catch((err) => console.warn('Error deleting expired card:', err));
+      return res.status(410).json({
+        error: 'This personalized greeting link was active for 30 days and has now expired.',
         expired: true,
+        notFound: false,
       });
     }
+
+    if (!rawGreeting) {
+      return res.status(404).json({
+        error: 'Greeting card not found.',
+        notFound: true,
+        expired: false,
+      });
+    }
+
+    const greeting = rawGreeting;
 
     // Increment view count
     const updatedViewCount = await incrementGreetingViewCount(greeting.id);
@@ -1143,14 +1164,20 @@ async function startServer() {
 
     const projectData = greeting.project_json || {};
     const shortId = greeting.short_id || projectData.short_id || rawParam;
-    const expiresAt = greeting.expires_at || projectData.expiresAt;
-    const daysRemaining = expiresAt
-      ? Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
-      : CARD_RETENTION_DAYS;
+    const expiresAt =
+      greeting.expires_at ||
+      projectData.expiresAt ||
+      new Date(new Date(greeting.created_at).getTime() + CARD_RETENTION_MS).toISOString();
+    const daysRemaining = Math.max(
+      1,
+      Math.ceil((new Date(expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
+    );
 
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     return res.json({
       success: true,
+      expired: false,
+      notFound: false,
       id: greeting.id,
       short_id: shortId,
       shortId: shortId,

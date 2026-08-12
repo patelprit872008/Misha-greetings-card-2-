@@ -36,6 +36,15 @@ export type MusicTrackId =
   | 'custom-url'
   | 'none';
 
+export interface TimedUnlockConfig {
+  enabled: boolean;
+  unlockAt: string; // ISO string or "YYYY-MM-DDTHH:mm" e.g. "2026-08-15T00:00:00"
+  timezone?: string;
+  lockedTitle?: string;
+  lockedMessage?: string;
+  teaserNote?: string;
+}
+
 export interface EnvelopeConfig {
   enabled: boolean;
   style: 'wax-seal-envelope' | 'vintage-letter' | 'gift-box' | 'instant-fade';
@@ -46,6 +55,7 @@ export interface EnvelopeConfig {
   passcodeHint: string;
   confettiBurst?: boolean;
   celebrationStyle?: 'hearts-fireworks' | 'romantic-hearts' | 'gold-sparkles' | 'rainbow-confetti';
+  timedUnlock?: TimedUnlockConfig;
 }
 
 export interface HeroConfig {
@@ -217,6 +227,7 @@ export interface HeartPageData {
   reasons: ReasonsConfig;
   letter: LetterConfig;
   receiverResponse: ReceiverResponseConfig;
+  timedUnlock?: TimedUnlockConfig;
   createdAt: string;
   updatedAt: string;
   expiresAt?: string;

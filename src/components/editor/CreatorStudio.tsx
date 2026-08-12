@@ -1202,6 +1202,216 @@ export const CreatorStudio: React.FC<CreatorStudioProps> = ({
                     </div>
                   )}
                 </div>
+
+                {/* Scheduled Date & Time Reveal (Timed Unlock) */}
+                <div className="pt-3 border-t border-white/10 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                        <Clock size={14} className="text-rose-400" />
+                        <span>Schedule Date & Time Reveal ⏳</span>
+                      </h4>
+                      <p className="text-[11px] text-stone-400">
+                        Lock greeting until an exact future date & time (e.g. Birthday midnight, Anniversary, Valentine's)
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={Boolean(data.timedUnlock?.enabled || data.envelope.timedUnlock?.enabled)}
+                      onChange={(e) => {
+                        const isEnabled = e.target.checked;
+                        const currentUnlockAt =
+                          data.timedUnlock?.unlockAt ||
+                          data.envelope.timedUnlock?.unlockAt ||
+                          (() => {
+                            // Default to tonight midnight if empty
+                            const d = new Date();
+                            d.setDate(d.getDate() + 1);
+                            d.setHours(0, 0, 0, 0);
+                            return d.toISOString().slice(0, 16);
+                          })();
+
+                        const newConfig = {
+                          enabled: isEnabled,
+                          unlockAt: currentUnlockAt,
+                          lockedTitle: data.timedUnlock?.lockedTitle || 'A Special Surprise is Waiting For You! 🎁',
+                          lockedMessage:
+                            data.timedUnlock?.lockedMessage ||
+                            'This personalized greeting has been scheduled to open at this exact moment. Hold your excitement! ✨',
+                        };
+
+                        update({
+                          timedUnlock: newConfig,
+                          envelope: {
+                            ...data.envelope,
+                            timedUnlock: newConfig,
+                          },
+                        });
+                      }}
+                      className="w-5 h-5 accent-rose-500 rounded cursor-pointer"
+                    />
+                  </div>
+
+                  {(data.timedUnlock?.enabled || data.envelope.timedUnlock?.enabled) && (
+                    <div className="space-y-3 p-3.5 rounded-xl bg-white/5 border border-white/10">
+                      <div>
+                        <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                          Target Unlock Date & Time
+                        </label>
+                        <input
+                          type="datetime-local"
+                          value={
+                            (data.timedUnlock?.unlockAt || data.envelope.timedUnlock?.unlockAt || '').slice(0, 16)
+                          }
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const newConfig = {
+                              ...(data.timedUnlock || data.envelope.timedUnlock || { enabled: true }),
+                              enabled: true,
+                              unlockAt: val,
+                            };
+                            update({
+                              timedUnlock: newConfig,
+                              envelope: { ...data.envelope, timedUnlock: newConfig },
+                            });
+                          }}
+                          className="w-full px-3.5 py-2.5 rounded-xl bg-black/40 border border-white/15 text-sm text-white focus:outline-none focus:border-rose-400"
+                        />
+                      </div>
+
+                      {/* Quick Date Presets */}
+                      <div>
+                        <span className="block text-[11px] font-semibold text-stone-400 mb-1.5">
+                          Quick Presets:
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {[
+                            {
+                              label: 'Tonight Midnight 🌙',
+                              getDate: () => {
+                                const d = new Date();
+                                d.setDate(d.getDate() + 1);
+                                d.setHours(0, 0, 0, 0);
+                                return d.toISOString().slice(0, 16);
+                              },
+                            },
+                            {
+                              label: 'Tomorrow 9 AM ☀️',
+                              getDate: () => {
+                                const d = new Date();
+                                d.setDate(d.getDate() + 1);
+                                d.setHours(9, 0, 0, 0);
+                                return d.toISOString().slice(0, 16);
+                              },
+                            },
+                            {
+                              label: '+1 Hour ⏳',
+                              getDate: () => {
+                                const d = new Date(Date.now() + 60 * 60 * 1000);
+                                return d.toISOString().slice(0, 16);
+                              },
+                            },
+                            {
+                              label: '+24 Hours 📅',
+                              getDate: () => {
+                                const d = new Date(Date.now() + 24 * 60 * 60 * 1000);
+                                return d.toISOString().slice(0, 16);
+                              },
+                            },
+                            {
+                              label: 'Valentine’s Day 💖',
+                              getDate: () => {
+                                const year = new Date().getFullYear();
+                                const d = new Date(year, 1, 14, 0, 0, 0);
+                                if (d.getTime() < Date.now()) d.setFullYear(year + 1);
+                                return d.toISOString().slice(0, 16);
+                              },
+                            },
+                            {
+                              label: 'New Year 🎆',
+                              getDate: () => {
+                                const year = new Date().getFullYear() + 1;
+                                const d = new Date(year, 0, 1, 0, 0, 0);
+                                return d.toISOString().slice(0, 16);
+                              },
+                            },
+                          ].map((preset) => (
+                            <button
+                              key={preset.label}
+                              type="button"
+                              onClick={() => {
+                                const newDate = preset.getDate();
+                                const newConfig = {
+                                  ...(data.timedUnlock || data.envelope.timedUnlock || { enabled: true }),
+                                  enabled: true,
+                                  unlockAt: newDate,
+                                };
+                                update({
+                                  timedUnlock: newConfig,
+                                  envelope: { ...data.envelope, timedUnlock: newConfig },
+                                });
+                              }}
+                              className="px-2.5 py-1 rounded-lg text-[11px] font-medium text-stone-300 bg-white/10 hover:bg-white/20 border border-white/10 transition-colors cursor-pointer"
+                            >
+                              {preset.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Locked Title */}
+                      <div>
+                        <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                          Countdown Screen Title
+                        </label>
+                        <input
+                          type="text"
+                          value={data.timedUnlock?.lockedTitle || ''}
+                          onChange={(e) => {
+                            const newConfig = {
+                              ...(data.timedUnlock || data.envelope.timedUnlock || { enabled: true, unlockAt: '' }),
+                              lockedTitle: e.target.value,
+                            };
+                            update({
+                              timedUnlock: newConfig,
+                              envelope: { ...data.envelope, timedUnlock: newConfig },
+                            });
+                          }}
+                          placeholder="e.g. A Birthday Surprise is Waiting for You! 🎁"
+                          className="w-full px-3.5 py-2.5 rounded-xl bg-black/40 border border-white/15 text-sm text-white focus:outline-none focus:border-rose-400"
+                        />
+                      </div>
+
+                      {/* Locked Message */}
+                      <div>
+                        <label className="block text-xs font-semibold text-stone-300 uppercase tracking-wider mb-1.5">
+                          Countdown Teaser Message
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={data.timedUnlock?.lockedMessage || ''}
+                          onChange={(e) => {
+                            const newConfig = {
+                              ...(data.timedUnlock || data.envelope.timedUnlock || { enabled: true, unlockAt: '' }),
+                              lockedMessage: e.target.value,
+                            };
+                            update({
+                              timedUnlock: newConfig,
+                              envelope: { ...data.envelope, timedUnlock: newConfig },
+                            });
+                          }}
+                          placeholder="e.g. This special greeting will unlock automatically when the clock strikes midnight! Hold your excitement ✨"
+                          className="w-full px-3.5 py-2 rounded-xl bg-black/40 border border-white/15 text-xs text-white focus:outline-none focus:border-rose-400"
+                        />
+                      </div>
+
+                      {/* Notice about Dashboard Preview */}
+                      <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-200 leading-relaxed">
+                        💡 <strong>Dashboard Notice</strong>: You can freely preview and edit your card here in the studio without interruption. The live countdown lock screen will only appear on the generated share link for your recipient!
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -2357,6 +2567,7 @@ export const CreatorStudio: React.FC<CreatorStudioProps> = ({
             <div className="w-full h-full overflow-y-auto no-scrollbar">
               <ReceiverExperience
                 data={data}
+                isCreatorPreview={true}
                 onSendReaction={(reaction, note) => {
                   console.log('Preview reaction received:', reaction, note);
                 }}

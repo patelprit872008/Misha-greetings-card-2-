@@ -25,9 +25,12 @@ import { LetterSection } from './LetterSection';
 import { ReceiverResponseBar } from './ReceiverResponseBar';
 import { SecretChatView } from '../chat/SecretChatView';
 import { QRCodeModal } from '../common/QRCodeModal';
+import { TimedUnlockLockScreen } from './TimedUnlockLockScreen';
+import { Clock } from 'lucide-react';
 
 interface ReceiverExperienceProps {
   data: HeartPageData;
+  isCreatorPreview?: boolean;
   initialChatOpen?: boolean;
   initialChatKey?: string;
   onSendReaction?: (reaction: string, customNote?: string) => void;
@@ -36,11 +39,24 @@ interface ReceiverExperienceProps {
 
 export const ReceiverExperience: React.FC<ReceiverExperienceProps> = ({
   data,
+  isCreatorPreview = false,
   initialChatOpen = false,
   initialChatKey = '',
   onSendReaction,
   onCreateYourOwn,
 }) => {
+  const timedUnlockConfig = data.timedUnlock || data.envelope.timedUnlock;
+  const isScheduledInFuture = Boolean(
+    timedUnlockConfig &&
+    timedUnlockConfig.enabled &&
+    timedUnlockConfig.unlockAt &&
+    new Date(timedUnlockConfig.unlockAt).getTime() > Date.now()
+  );
+
+  // In Creator Studio / Dashboard, preview is NEVER locked so creator can edit freely.
+  // In the generated shared link, receiver will see the live countdown lock screen.
+  const [isTimeLocked, setIsTimeLocked] = useState(!isCreatorPreview && isScheduledInFuture);
+
   const [isOpen, setIsOpen] = useState(!data.envelope.enabled);
   const [isChatOpen, setIsChatOpen] = useState(initialChatOpen);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
@@ -79,6 +95,20 @@ export const ReceiverExperience: React.FC<ReceiverExperienceProps> = ({
     );
   }
 
+  // If card is scheduled for a future date/time and not in creator dashboard preview, render live countdown lock screen
+  if (isTimeLocked && timedUnlockConfig) {
+    return (
+      <TimedUnlockLockScreen
+        timedUnlock={timedUnlockConfig}
+        hero={data.hero}
+        theme={theme}
+        passcode={data.envelope.passcode}
+        chatKey={data.chatKey}
+        onUnlock={() => setIsTimeLocked(false)}
+      />
+    );
+  }
+
   return (
     <div
       id="heartpage-receiver-root"
@@ -88,6 +118,17 @@ export const ReceiverExperience: React.FC<ReceiverExperienceProps> = ({
         color: theme.textPrimary,
       }}
     >
+      {/* Top Banner when in Creator Preview Mode and Timed Unlock is configured */}
+      {isCreatorPreview && isScheduledInFuture && timedUnlockConfig && (
+        <div className="bg-amber-500/20 border-b border-amber-500/30 px-3 py-1.5 text-center text-[11px] text-amber-200 font-medium flex items-center justify-center gap-1.5 z-40 relative">
+          <Clock size={12} className="text-amber-300 animate-pulse" />
+          <span>
+            Studio Preview Mode: Timed Unlock is active on generated link (Will unlock on{' '}
+            {new Date(timedUnlockConfig.unlockAt).toLocaleString()})
+          </span>
+        </div>
+      )}
+
       {/* Floating Particle Atmosphere */}
       <FloatingParticles type={data.particleEffect} />
 

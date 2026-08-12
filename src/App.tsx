@@ -41,6 +41,12 @@ export const getCleanDefaultTemplate = (userName?: string): HeartPageData => {
       subtitle: 'Tap any photo to read the secret memory written behind it!',
       photos: [], // Empty default so each user uploads and sees ONLY their own photos
     },
+    timedUnlock: {
+      enabled: false,
+      unlockAt: '',
+      lockedTitle: '',
+      lockedMessage: '',
+    },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -184,6 +190,12 @@ function extractAndNormalizeGreeting(serverResponse: any): HeartPageData | null 
       ...defaultTmpl.receiverResponse,
       ...(rawData.receiverResponse || {}),
     },
+    timedUnlock: rawData.timedUnlock || rawData.envelope?.timedUnlock || {
+      enabled: false,
+      unlockAt: '',
+      lockedTitle: '',
+      lockedMessage: '',
+    },
   };
 
   return normalized;
@@ -307,25 +319,30 @@ function MainApp() {
           setIsLoadingShared(true);
 
           try {
+            const cleanId = encodeURIComponent(urlState.pageId.trim());
             const fetchEndpoints = [
-              `/api/g/${urlState.pageId}`,
-              `/api/greetings/${urlState.pageId}`,
-              `/api/pages/${urlState.pageId}`,
+              `/api/g/${cleanId}`,
+              `/api/greetings/${cleanId}`,
+              `/api/pages/${cleanId}`,
             ];
 
+            let cardExpired = false;
             let foundCard = false;
+
             for (const endpoint of fetchEndpoints) {
               try {
                 const res = await fetch(endpoint);
                 const contentType = res.headers.get('content-type') || '';
                 if (contentType.includes('application/json')) {
                   const serverResponse = await res.json();
-                  if (res.status === 404 || serverResponse?.expired) {
-                    setIsCardExpired(true);
-                    setIsLoadingShared(false);
-                    return;
+
+                  // Only if explicitly expired after 30-day retention
+                  if (res.status === 410 || serverResponse?.expired === true) {
+                    cardExpired = true;
+                    break;
                   }
-                  if (res.ok) {
+
+                  if (res.ok && serverResponse && !serverResponse.expired) {
                     const normalized = extractAndNormalizeGreeting(serverResponse);
                     if (normalized && (normalized.hero || normalized.id)) {
                       setPageData(normalized);
@@ -346,6 +363,12 @@ function MainApp() {
               }
             }
 
+            if (cardExpired) {
+              setIsCardExpired(true);
+              setIsLoadingShared(false);
+              return;
+            }
+
             if (!foundCard) {
               // Check if offline cache exists
               try {
@@ -363,7 +386,7 @@ function MainApp() {
                 }
               } catch (e) {}
 
-              // Card not found or expired after 30 days
+              // Card not found
               setIsCardExpired(true);
               setIsLoadingShared(false);
               return;
@@ -585,10 +608,10 @@ function MainApp() {
                 ⏳ 30-Day Retention Expired
               </span>
               <h2 className="text-xl sm:text-2xl font-bold text-white font-serif-display mt-2">
-                Yeh Card Expire Ho Chuka Hai
+                This Greeting Link Has Expired
               </h2>
               <p className="text-xs sm:text-sm text-stone-400 leading-relaxed max-w-sm mx-auto">
-                Misha Greetings privacy aur storage retention policy ke mutabiq yeh greeting card <strong>30 dino</strong> ke liye active tha aur ab automatically remove ho chuka hai.
+                In accordance with our privacy and data retention policy, personalized greeting links remain active for exactly <strong>30 days</strong> and are automatically removed once expired.
               </p>
             </div>
 
@@ -602,7 +625,7 @@ function MainApp() {
                 className="w-full py-3.5 px-4 rounded-xl font-bold text-sm text-white bg-gradient-to-r from-rose-600 via-pink-600 to-rose-500 hover:from-rose-500 hover:to-pink-500 shadow-lg shadow-rose-950/60 flex items-center justify-center gap-2 transition-all active:scale-[0.98] cursor-pointer"
               >
                 <Plus size={18} />
-                <span>Create New Greeting Card ❤️</span>
+                <span>Create a New Greeting Card ❤️</span>
               </button>
 
               <button
@@ -612,6 +635,7 @@ function MainApp() {
                 }}
                 className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold text-stone-400 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
               >
+                <ArrowLeft size={14} />
                 <span>Back to Home</span>
               </button>
             </div>
@@ -624,6 +648,7 @@ function MainApp() {
       <div className="relative">
         <ReceiverExperience
           data={pageData}
+          isCreatorPreview={false}
           initialChatOpen={initialChatOpen}
           initialChatKey={initialChatKey}
           onSendReaction={handleSendReaction}

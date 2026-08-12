@@ -376,39 +376,55 @@ export function extractMediaUrlsFromObj(obj: any): string[] {
   return Array.from(new Set(urls));
 }
 
-export function isGreetingExpired(greeting: { created_at?: string; expires_at?: string } | null | undefined): boolean {
+export function isGreetingExpired(greeting: { created_at?: string; expires_at?: string; createdAt?: string; expiresAt?: string } | null | undefined): boolean {
   if (!greeting) return false;
   const now = Date.now();
-  if (greeting.expires_at) {
-    return new Date(greeting.expires_at).getTime() <= now;
+  const expiresAt = greeting.expires_at || (greeting as any).expiresAt;
+  if (expiresAt) {
+    const expTime = new Date(expiresAt).getTime();
+    if (!isNaN(expTime)) {
+      return expTime <= now;
+    }
   }
-  if (greeting.created_at) {
-    return (now - new Date(greeting.created_at).getTime()) >= CARD_RETENTION_MS;
+  const createdAt = greeting.created_at || (greeting as any).createdAt;
+  if (createdAt) {
+    const createdTime = new Date(createdAt).getTime();
+    if (!isNaN(createdTime)) {
+      return (now - createdTime) >= CARD_RETENTION_MS;
+    }
   }
   return false;
 }
 
 export async function saveGreeting(record: GreetingRecord): Promise<GreetingRecord> {
-  const nowIso = new Date().toISOString();
-  record.created_at = record.created_at || nowIso;
+  const now = Date.now();
+  const nowIso = new Date(now).toISOString();
+  
+  // If created_at is missing, invalid, or already expired in the past, reset to now
+  let validCreatedTime = record.created_at ? new Date(record.created_at).getTime() : now;
+  if (isNaN(validCreatedTime) || (now - validCreatedTime) >= CARD_RETENTION_MS) {
+    validCreatedTime = now;
+    record.created_at = nowIso;
+  } else {
+    record.created_at = new Date(validCreatedTime).toISOString();
+  }
   record.updated_at = nowIso;
   
-  // Enforce 30-day expiration retention
-  if (!record.expires_at) {
-    const createdTimestamp = new Date(record.created_at).getTime();
-    record.expires_at = new Date(createdTimestamp + CARD_RETENTION_MS).toISOString();
-  }
+  // Enforce exactly 30-day expiration retention from valid creation time
+  record.expires_at = new Date(validCreatedTime + CARD_RETENTION_MS).toISOString();
 
   // Ensure project_json has retention metadata
   if (record.project_json && typeof record.project_json === 'object') {
     record.project_json.retentionExpiresAt = record.expires_at;
+    record.project_json.expiresAt = record.expires_at;
     record.project_json.retentionDays = CARD_RETENTION_DAYS;
   }
 
-  // Always update local cache & disk
+  // Always update local cache & disk (including case-insensitive shortId)
   localGreetings.set(record.id, record);
   if (record.short_id) {
     localShortIds.set(record.short_id, record.id);
+    localShortIds.set(record.short_id.toLowerCase(), record.id);
   }
   saveLocalStoreToDisk();
 
@@ -460,8 +476,8 @@ export async function saveGreeting(record: GreetingRecord): Promise<GreetingReco
   return record;
 }
 
-// Internal raw getter without auto-deletion (for internal operations)
-async function getRawGreetingById(idOrShortId: string): Promise<GreetingRecord | null> {
+// Raw getter without auto-deletion (for internal operations and expiration verification)
+export async function getRawGreetingById(idOrShortId: string): Promise<GreetingRecord | null> {
   const clean = (idOrShortId || '').trim();
   if (!clean) return null;
 
@@ -472,7 +488,12 @@ async function getRawGreetingById(idOrShortId: string): Promise<GreetingRecord |
         `SELECT id, short_id, owner_id, title, project_json, status, visibility,
                 password_hash, created_at, updated_at, expires_at, view_count,
                 chat_key, creator_name, creator_email
-         FROM greetings WHERE id = $1 OR short_id = $1 LIMIT 1`,
+         FROM greetings 
+         WHERE id = $1 
+            OR short_id = $1 
+            OR LOWER(short_id) = LOWER($1) 
+            OR LOWER(id) = LOWER($1) 
+         LIMIT 1`,
         [clean]
       );
       if (res.rows.length > 0) {
@@ -502,13 +523,24 @@ async function getRawGreetingById(idOrShortId: string): Promise<GreetingRecord |
 
   if (localShortIds.has(clean)) {
     const cardId = localShortIds.get(clean)!;
-    return localGreetings.get(cardId) || null;
+    const g = localGreetings.get(cardId);
+    if (g) return g;
+  }
+  if (localShortIds.has(clean.toLowerCase())) {
+    const cardId = localShortIds.get(clean.toLowerCase())!;
+    const g = localGreetings.get(cardId);
+    if (g) return g;
   }
   if (localGreetings.has(clean)) {
     return localGreetings.get(clean)!;
   }
   for (const greeting of localGreetings.values()) {
-    if (greeting.short_id === clean || greeting.id === clean || greeting.short_id?.toLowerCase() === clean.toLowerCase()) {
+    if (
+      greeting.short_id === clean ||
+      greeting.id === clean ||
+      greeting.short_id?.toLowerCase() === clean.toLowerCase() ||
+      greeting.id?.toLowerCase() === clean.toLowerCase()
+    ) {
       return greeting;
     }
   }

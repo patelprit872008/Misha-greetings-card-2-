@@ -60,6 +60,14 @@ export const ShareModal: React.FC<ShareModalProps> = ({
   const chatKey = (data.chatKey || 'LOVE-9999').trim().toUpperCase();
   const directChatLink = `${finalLink}${finalLink.includes('?') ? '&' : '?'}chat=1&key=${chatKey}`;
 
+  const timedUnlock = data.timedUnlock || data.envelope?.timedUnlock;
+  const isScheduled = Boolean(
+    timedUnlock &&
+    timedUnlock.enabled &&
+    timedUnlock.unlockAt &&
+    new Date(timedUnlock.unlockAt).getTime() > Date.now()
+  );
+
   useEffect(() => {
     if (isOpen && finalLink) {
       QRCode.toDataURL(finalLink, {
@@ -209,6 +217,22 @@ export const ShareModal: React.FC<ShareModalProps> = ({
               Short unique link saved permanently on the server with all photos, audio, and animations.
             </p>
           </div>
+
+          {/* Timed Reveal Scheduled Badge if active */}
+          {isScheduled && timedUnlock && (
+            <div className="p-3.5 rounded-2xl bg-purple-500/10 border border-purple-500/30 flex items-start gap-2.5">
+              <Clock size={16} className="text-purple-400 shrink-0 mt-0.5 animate-pulse" />
+              <div className="text-xs">
+                <div className="font-bold text-purple-200 flex items-center gap-1.5">
+                  <span>Scheduled Date & Time Reveal Active ⏳</span>
+                </div>
+                <p className="text-stone-300 mt-0.5 leading-relaxed">
+                  Scheduled to unlock on: <strong className="text-white">{new Date(timedUnlock.unlockAt).toLocaleString()}</strong>.
+                  Until that exact moment, {receiverDisplayName} will see a live real-time countdown clock!
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* 2. Secret Room Passkey Box */}
           <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30">
